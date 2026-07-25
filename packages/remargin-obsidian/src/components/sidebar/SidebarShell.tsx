@@ -221,7 +221,13 @@ export function SidebarShell({
         </div>
       </div>
 
-      <ScrollArea className="flex-1 min-w-0">
+      {/* `min-h-0` is load-bearing: a flex item defaults to
+          `min-height: auto`, which forbids it from shrinking below its
+          content. Without it `flex-1` never caps this height, the Radix
+          root grows to the full comment list, scrollHeight equals
+          clientHeight, and the panel scrolls the whole Obsidian pane
+          instead of itself. `min-w-0` is the same fix on the other axis. */}
+      <ScrollArea className="flex-1 min-h-0 min-w-0">
         <div className="flex flex-col min-w-0">
           <Collapsible open={sandboxOpen} onOpenChange={setSandboxOpen}>
             <SectionHeader
