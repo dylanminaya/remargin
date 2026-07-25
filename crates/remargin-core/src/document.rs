@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 
 use tixschema::model_schema;
 
+use crate::advice::{self, Advice};
 use crate::config::ResolvedConfig;
 use crate::frontmatter;
 use crate::operations::links::{self, Link};
@@ -194,23 +195,43 @@ impl RmOutcome {
 /// on-disk file and no disk write was performed. Retries and idempotent
 /// re-submits of the same content settle here, keeping file mtime stable
 /// and avoiding downstream watcher/reload noise.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct WriteOutcome {
     pub noop: bool,
+    /// Advisory notes about the payload the caller supplied. Never a
+    /// reason to treat the write as failed: the write already succeeded
+    /// by the time these are attached.
+    pub warnings: Vec<Advice>,
 }
 
 impl WriteOutcome {
+    /// A completed write carrying no advice yet; [`write`] attaches any.
+    #[must_use]
+    const fn new(noop: bool) -> Self {
+        Self {
+            noop,
+            warnings: Vec::new(),
+        }
+    }
+
     /// `raw` is forced true for binary writes (they skip the frontmatter
     /// / comment-preservation pass), so callers don't need to OR it in.
+    ///
+    /// `warnings` appears only when there is something to say, so a clean
+    /// write keeps the payload it has always had.
     #[must_use]
     pub fn to_json(self, written: &str, binary: bool, raw: bool) -> Value {
-        json!({
+        let mut payload = json!({
             "written": written,
             "binary": binary,
             "raw": raw || binary,
             "noop": self.noop,
-        })
+        });
+        if !self.warnings.is_empty() {
+            payload["warnings"] = advice::to_json(&self.warnings);
+        }
+        payload
     }
 }
 
@@ -956,6 +977,40 @@ pub fn write(
     config: &ResolvedConfig,
     opts: WriteOptions,
 ) -> Result<WriteOutcome> {
+    let warnings = review_payload(path, content, &opts);
+    let mut outcome = write_content(system, base_dir, path, content, config, opts)?;
+    // Attached after the write lands, so advice never rides on a failure
+    // and never has a say in whether the write happened.
+    outcome.warnings = warnings;
+    Ok(outcome)
+}
+
+/// Advisory notes for the payload the caller supplied.
+///
+/// Reviews the caller's own text rather than the finished document: a
+/// partial write must never be advised about prose someone else wrote
+/// elsewhere in the file. Binary payloads and non-markdown targets carry
+/// no prose to review. A partial write's notes are shifted to the file's
+/// own line numbering.
+fn review_payload(path: &Path, content: &str, opts: &WriteOptions) -> Vec<Advice> {
+    if opts.binary || !is_markdown_extension(path) {
+        return Vec::new();
+    }
+    let mut notes = advice::review(content);
+    if let Some((start, _)) = opts.lines {
+        advice::offset_lines(&mut notes, start.saturating_sub(1));
+    }
+    notes
+}
+
+fn write_content(
+    system: &dyn System,
+    base_dir: &Path,
+    path: &Path,
+    content: &str,
+    config: &ResolvedConfig,
+    opts: WriteOptions,
+) -> Result<WriteOutcome> {
     ensure_not_forbidden_target(path)?;
     pre_mutate_check_for_caller(system, "write", path, &config.caller_info())?;
     validate_write_opts(path, &opts)?;
@@ -995,22 +1050,22 @@ pub fn write(
             .decode(content)
             .context("invalid base64 content")?;
         if is_byte_identical(system, &resolved, &bytes) {
-            return Ok(WriteOutcome { noop: true });
+            return Ok(WriteOutcome::new(true));
         }
         system
             .write(&resolved, &bytes)
             .with_context(|| format!("writing {}", resolved.display()))?;
-        return Ok(WriteOutcome { noop: false });
+        return Ok(WriteOutcome::new(false));
     }
 
     if opts.raw {
         if is_byte_identical(system, &resolved, content.as_bytes()) {
-            return Ok(WriteOutcome { noop: true });
+            return Ok(WriteOutcome::new(true));
         }
         system
             .write(&resolved, content.as_bytes())
             .with_context(|| format!("writing {}", resolved.display()))?;
-        return Ok(WriteOutcome { noop: false });
+        return Ok(WriteOutcome::new(false));
     }
 
     // Non-markdown extensions skip parse / ensure_frontmatter / verify
@@ -1026,12 +1081,12 @@ pub fn write(
             content.as_bytes().to_vec()
         };
         if is_byte_identical(system, &resolved, &bytes) {
-            return Ok(WriteOutcome { noop: true });
+            return Ok(WriteOutcome::new(true));
         }
         system
             .write(&resolved, &bytes)
             .with_context(|| format!("writing {}", resolved.display()))?;
-        return Ok(WriteOutcome { noop: false });
+        return Ok(WriteOutcome::new(false));
     }
 
     // Partial write: splice the replacement content into `[start..=end]`,
@@ -1112,7 +1167,7 @@ pub(crate) fn commit_markdown(
     // guaranteed not to exist, ruled out above).
     let final_content = final_doc.to_markdown()?;
     if !create && is_byte_identical(system, resolved, final_content.as_bytes()) {
-        return Ok(WriteOutcome { noop: true });
+        return Ok(WriteOutcome::new(true));
     }
 
     commit_with_verify(system, &final_doc, &realm_cfg, resolved, |verified_doc| {
@@ -1122,7 +1177,7 @@ pub(crate) fn commit_markdown(
             .with_context(|| format!("writing {}", resolved.display()))
     })?;
 
-    Ok(WriteOutcome { noop: false })
+    Ok(WriteOutcome::new(false))
 }
 
 /// No-write projection of [`commit_markdown`].

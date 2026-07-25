@@ -6465,3 +6465,134 @@ fn batch_reply_auto_ack_false_without_reason_rejects_whole_batch() {
     let comments = extract_tool_text(&listing);
     assert_eq!(comments["comments"].as_array().unwrap().len(), 1);
 }
+
+// --- Advisory warnings on the comment surfaces ---------------------------
+
+/// A hard-wrapped comment body still posts and still returns its id; the
+/// advice is an extra field on the successful result, not a refusal.
+#[test]
+fn comment_attaches_advice_for_hard_wrapped_body_without_failing() {
+    let base = Path::new("/docs");
+    let system = system_with_doc(base, "doc.md", "# Hello\n\nSome text.\n");
+    let config = test_config();
+
+    let response = call(
+        &system,
+        base,
+        &config,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1_i32,
+            "method": "tools/call",
+            "params": {
+                "name": "comment",
+                "arguments": {
+                    "file": "doc.md",
+                    "content": "This comment body is broken\nacross two lines by hand."
+                }
+            }
+        }),
+    );
+
+    let result = extract_tool_text(&response);
+    assert!(
+        result["id"].is_string() && !result["id"].as_str().unwrap().is_empty(),
+        "the comment was still created: {result}"
+    );
+    let warnings = result["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1_usize, "{result}");
+    assert_eq!(warnings[0]["line"].as_u64(), Some(1));
+    assert!(
+        warnings[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("hard-wrapped"),
+        "advisory wording: {result}"
+    );
+}
+
+/// A one-line comment body draws nothing, keeping the result exactly the
+/// shape callers already parse.
+#[test]
+fn comment_omits_warnings_for_continuous_body() {
+    let base = Path::new("/docs");
+    let system = system_with_doc(base, "doc.md", "# Hello\n\nSome text.\n");
+    let config = test_config();
+
+    let response = call(
+        &system,
+        base,
+        &config,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1_i32,
+            "method": "tools/call",
+            "params": {
+                "name": "comment",
+                "arguments": {
+                    "file": "doc.md",
+                    "content": "One continuous line, however long it happens to run."
+                }
+            }
+        }),
+    );
+
+    let result = extract_tool_text(&response);
+    assert!(result["id"].is_string(), "{result}");
+    assert!(
+        result.get("warnings").is_none(),
+        "clean body keeps the original payload: {result}"
+    );
+}
+
+/// `reply` funnels through the comment handler, so it inherits the same
+/// advisory pass over the body it posts.
+#[test]
+fn reply_inherits_the_comment_advisory_pass() {
+    let base = Path::new("/docs");
+    let system = system_with_doc(base, "doc.md", "# Hello\n\nSome text.\n");
+    let config = test_config();
+
+    let created = call(
+        &system,
+        base,
+        &config,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1_i32,
+            "method": "tools/call",
+            "params": {
+                "name": "comment",
+                "arguments": { "file": "doc.md", "content": "Parent comment." }
+            }
+        }),
+    );
+    let parent_id = String::from(extract_tool_text(&created)["id"].as_str().unwrap());
+
+    let response = call(
+        &system,
+        base,
+        &config,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2_i32,
+            "method": "tools/call",
+            "params": {
+                "name": "reply",
+                "arguments": {
+                    "file": "doc.md",
+                    "parent_id": parent_id,
+                    "content": "A reply wrapped\nby hand."
+                }
+            }
+        }),
+    );
+
+    let result = extract_tool_text(&response);
+    assert!(result["id"].is_string(), "the reply still posted: {result}");
+    assert_eq!(
+        result["warnings"].as_array().unwrap().len(),
+        1_usize,
+        "{result}"
+    );
+}

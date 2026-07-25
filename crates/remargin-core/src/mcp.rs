@@ -17,6 +17,7 @@ use os_shim::System;
 use serde_json::{Map, Value, json};
 
 use crate::activity;
+use crate::advice;
 use crate::config::identity::{IdentityFlags, resolve_identity_report};
 use crate::config::permissions::resolve::{ResolvedPermissions, resolve_permissions};
 use crate::config::system_prompt::resolve_system_prompt;
@@ -1994,7 +1995,11 @@ fn handle_comment(
 
     let path = base_dir.join(file);
     let new_id = operations::create_comment(system, &path, cfg, &create_params)?;
-    Ok(responses::comment_created(&new_id))
+    // `reply` funnels through here too, so both comment surfaces get the
+    // same advisory pass over the body the caller wrote.
+    let mut result = responses::comment_created(&new_id);
+    advice::attach(&mut result, content);
+    Ok(result)
 }
 
 /// Handle the `comments` tool: list all comments in a document.
@@ -2081,7 +2086,9 @@ fn handle_edit(
         new_content,
         new_kinds.as_deref(),
     )?;
-    Ok(responses::comment_edited(comment_id))
+    let mut result = responses::comment_edited(comment_id);
+    advice::attach(&mut result, new_content);
+    Ok(result)
 }
 
 /// Build the MCP content array for a binary `get`: an embedded resource block

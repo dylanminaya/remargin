@@ -40,6 +40,7 @@ use crate::{
     PlanClaudeAction, PluginAction, RegistryAction, SandboxAction,
 };
 use remargin_core::activity;
+use remargin_core::advice;
 use remargin_core::config::identity::{IdentityFlags, resolve_identity_report};
 use remargin_core::config::{self, ResolvedConfig};
 use remargin_core::crypto;
@@ -3059,7 +3060,21 @@ pub fn cmd_write(
         None => read_stdin()?,
     };
 
-    let outcome = document::write(system, cwd, target, &body, config, wp.opts)?;
+    let mut outcome = document::write(system, cwd, target, &body, config, wp.opts)?;
+
+    // Advisory only: printed to stderr so it never contaminates stdout
+    // (piped payloads, `--json` consumers), and never touches the exit
+    // code. The write has already succeeded by this point. Clearing them
+    // afterwards keeps the human-facing text block from repeating on
+    // stdout what stderr just said; `--json` keeps them in the payload,
+    // which is the only channel a JSON consumer reads.
+    if !wp.json_mode {
+        let notes = advice::format_text(&outcome.warnings);
+        if !notes.is_empty() {
+            write!(sinks.stderr, "{notes}").context("writing advice to stderr")?;
+        }
+        outcome.warnings.clear();
+    }
 
     // A no-op prints a one-line human message in text mode instead of
     // the usual "written: ... / binary: ... / raw: ..." block; JSON mode

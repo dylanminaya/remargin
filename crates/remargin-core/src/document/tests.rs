@@ -3986,3 +3986,150 @@ fn project_write_refuses_forbidden_targets() {
         assert_forbidden_error(&err, basename);
     }
 }
+
+// --- Advisory warnings on the write path ---------------------------------
+
+/// Hard-wrapped prose still writes, byte-for-byte as supplied; the advice
+/// rides back on the successful outcome instead of blocking anything.
+#[test]
+fn write_advises_on_hard_wrapped_prose_without_blocking() {
+    let system = MockSystem::new()
+        .with_current_dir("/project")
+        .unwrap()
+        .with_dir(Path::new("/project"))
+        .unwrap();
+
+    let config = open_config();
+    let content =
+        "# Doc\n\nGoal. Three actions per revision, Accept and\nManual Edit and Accept & Apply.\n";
+
+    let outcome = document::write(
+        &system,
+        Path::new("/project"),
+        Path::new("wrapped.md"),
+        content,
+        &config,
+        WriteOptions {
+            create: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(outcome.warnings.len(), 1_usize, "{:?}", outcome.warnings);
+    assert_eq!(outcome.warnings[0].line, 3_usize);
+    assert!(
+        outcome.warnings[0].message.contains("hard-wrapped"),
+        "advisory wording: {}",
+        outcome.warnings[0].message
+    );
+
+    // The advice changed nothing: the wrapped prose is on disk as written.
+    let written = system
+        .read_to_string(Path::new("/project/wrapped.md"))
+        .unwrap();
+    assert!(
+        written.contains("Accept and\nManual Edit"),
+        "the write is untouched by the advice: {written}"
+    );
+}
+
+/// Continuous prose says nothing, and the JSON payload keeps exactly the
+/// shape it had before advice existed.
+#[test]
+fn write_stays_silent_on_continuous_prose() {
+    let system = MockSystem::new()
+        .with_current_dir("/project")
+        .unwrap()
+        .with_dir(Path::new("/project"))
+        .unwrap();
+
+    let config = open_config();
+    let content =
+        "# Doc\n\nOne continuous paragraph that the viewer is free to wrap however it likes.\n";
+
+    let outcome = document::write(
+        &system,
+        Path::new("/project"),
+        Path::new("clean.md"),
+        content,
+        &config,
+        WriteOptions {
+            create: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+    let payload = outcome.to_json("clean.md", false, false);
+    assert!(
+        payload.get("warnings").is_none(),
+        "a clean write keeps its original payload: {payload}"
+    );
+}
+
+/// A partial write is advised only about the fragment the caller supplied,
+/// with line numbers shifted onto the file's own numbering.
+#[test]
+fn write_partial_offsets_advice_onto_file_lines() {
+    let system = MockSystem::new()
+        .with_current_dir("/project")
+        .unwrap()
+        .with_dir(Path::new("/project"))
+        .unwrap()
+        .with_file(
+            Path::new("/project/doc.md"),
+            b"# Doc\n\nline three\nline four\nline five\n",
+        )
+        .unwrap();
+
+    let config = open_config();
+
+    let outcome = document::write(
+        &system,
+        Path::new("/project"),
+        Path::new("doc.md"),
+        "replacement prose broken\nacross two lines\n",
+        &config,
+        WriteOptions {
+            lines: Some((3, 5)),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(outcome.warnings.len(), 1_usize, "{:?}", outcome.warnings);
+    assert_eq!(
+        outcome.warnings[0].line, 3_usize,
+        "fragment line 1 is file line 3"
+    );
+}
+
+/// Comment blocks are stored as fenced `remargin` code blocks, so an
+/// existing thread in the document never draws advice.
+#[test]
+fn write_never_advises_about_stored_comment_blocks() {
+    let system = MockSystem::new()
+        .with_current_dir("/project")
+        .unwrap()
+        .with_dir(Path::new("/project"))
+        .unwrap();
+
+    let config = open_config();
+
+    let outcome = document::write(
+        &system,
+        Path::new("/project"),
+        Path::new("threaded.md"),
+        DOC_WITH_COMMENTS,
+        &config,
+        WriteOptions {
+            create: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+}

@@ -12,6 +12,7 @@
 
 // Module declarations — uncommented as features are implemented.
 pub mod activity;
+pub mod advice;
 pub mod config;
 pub mod crypto;
 pub mod display;
