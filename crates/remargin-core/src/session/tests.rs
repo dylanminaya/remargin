@@ -244,6 +244,11 @@ fn build_launch_spec_composes_full_session() {
             .contains("/goal process pending work; stop when the sandbox is empty")
     );
     assert!(spec.prompt.contains("Remargin operating rules"));
+    assert!(
+        spec.prompt.contains("never hard-wrap prose"),
+        "every launched session inherits the continuous-prose rule: {}",
+        spec.prompt
+    );
     assert_eq!(spec.model.as_deref(), Some("claude-opus-4-8"));
     assert_eq!(spec.effort.as_deref(), Some("high"));
     assert_eq!(spec.budget.as_ref().unwrap().max_turns, Some(40));

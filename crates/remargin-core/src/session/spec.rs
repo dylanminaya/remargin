@@ -42,7 +42,15 @@ and ack only your own queue.
 - Surface decisions you cannot make as comments to the owner, not as prose \
 left in the document body.
 - Respect the realm's permissions and signing mode; never weaken a gate to \
-make an operation succeed.";
+make an operation succeed.
+- **IMPORTANT -- never hard-wrap prose.** Write each paragraph as ONE \
+continuous line, however long it runs, and let the reader's viewer wrap it. \
+Do not break a paragraph at 80, 100, or any other column. A newline inside a \
+document body is meaningful markdown structure, so a break landing \
+mid-sentence is a defect. This governs everything you write through \
+remargin: document bodies, comment bodies, and replies. Real line breaks \
+(between paragraphs, list items, table rows, and inside fenced code) stay \
+exactly as they are.";
 
 /// How to bring up the `remargin mcp` server for one launched session.
 ///
