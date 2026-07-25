@@ -30,13 +30,13 @@ tixschema = { git = "https://github.com/tixena/tixschema.git", features = ["chro
 
 # Cryptography (checksums, signatures)
 sha2 = "0.11"
-ed25519-dalek = { version = "2", features = ["rand_core"] }
+ed25519-dalek = { version = "3", features = ["rand_core"] }
 rand_core = { version = "0.10.1" }
 getrandom = "0.4"
-base64 = "0.22"
+base64 = ">=0.23"
 
 # Error handling
-anyhow = "1.0"
+anyhow = ">=1.0.103"
 thiserror = "2"
 
 # File system
@@ -47,20 +47,20 @@ ignore = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 
 # Date/time
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = ">=0.4.45", features = ["serde"] }
 
 # Random ID generation
-rand = "0.10"
+rand = ">=0.10.2"
 
 # Regex (text search)
-regex = "1"
+regex = ">=1.13.1"
 
 # Human-friendly duration parsing (session: loop interval; `session` feature)
 humantime = "2"
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = ">=0.3.23", features = ["env-filter", "fmt"] }
 
 # HTTP client (sync, minimal, pure-Rust TLS). Used by the `obsidian` feature
 # to fetch plugin assets from GitHub releases at install time.
