@@ -730,6 +730,7 @@ fn bash_git_verb_guidance() {
     let reason = deny_reason(&decision);
     assert!(reason.contains("mcp__remargin__"));
     assert!(reason.contains("git"));
+    assert!(reason.contains("human's job"));
 }
 
 #[test]
@@ -1905,7 +1906,7 @@ fn in_realm_cwd_git_is_denied_with_git_guidance() {
     );
     let decision = expect_deny(pretool(&system, &stdin));
     assert!(
-        deny_reason(&decision).contains("staged or moved by git"),
+        deny_reason(&decision).contains("human's job"),
         "reason must carry the git guidance: {}",
         deny_reason(&decision),
     );

@@ -1058,8 +1058,9 @@ fn verb_guidance(
              comment-preservation guarantees."
         ),
         "git" => String::from(
-            "If the managed path is being staged or moved by git, run the matching \
-             `mcp__remargin__*` op first (mv / rm / write), then let git track the result.",
+            "For the content change, run the matching `mcp__remargin__*` op (mv / rm / write). \
+             git itself is the human's job here -- ask them to run it from their own terminal; \
+             no git invocation against a managed realm is available to you.",
         ),
         _ => return None,
     })
