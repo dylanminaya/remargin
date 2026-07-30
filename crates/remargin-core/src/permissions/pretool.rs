@@ -415,9 +415,11 @@ fn bash_decision(
     }
 
     // From an in-realm cwd, bare relative words carry no path evidence and
-    // no token scan can prove the command safe — fail closed.
+    // no token scan can prove the command safe — fail closed. The cwd is a
+    // directory, not a path-shaped word: resolve from the cwd itself so a
+    // realm rooted exactly at the cwd (a wildcard root) is visible.
     let canonical_cwd = canonicalize_existing_prefix(system, &lexical_normalize(event_cwd));
-    let resolved_cwd = match resolve_for_target(system, &canonical_cwd) {
+    let resolved_cwd = match resolve_permissions(system, &canonical_cwd) {
         Ok(value) => value,
         Err(err) => {
             return PretoolOutcome::Fail(format!("permissions resolve failed: {err}"));
