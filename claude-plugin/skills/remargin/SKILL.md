@@ -400,25 +400,25 @@ Each is a concrete failure mode that has bitten a session.
 
 ## Working with git
 
-The Claude Code hook that enforces remargin access blocks any Bash command whose argument string contains the vault path (e.g. `/home/eduardoburgos/src/tixena/eburgos_notes`). This means these forms are **always blocked**, no matter how you spell them:
+Git inside a managed realm is the human's job, not yours. When your working directory sits inside a realm's trusted root — which is exactly where remargin-launched sessions put you — the hook denies **every** Bash command unless every command in it is the `remargin` CLI, and git gets no carve-out:
 
 ```bash
-git -C /path/to/vault status           # blocked — path in argument
-git --git-dir=/path/to/vault/.git log  # blocked — path in argument
-git --work-tree=/path/to/vault status  # blocked — path in argument
+git status      # denied — in-realm working directory
+git log         # denied
+git add <file>  # denied
+git commit      # denied
+git push        # denied
 ```
 
-Plain git commands with **no path argument** are **not blocked** and work normally from within the vault's shell context:
+Git commands that name a managed path in their arguments are equally denied from **any** working directory:
 
 ```bash
-git status      # works
-git log         # works
-git push        # works
-git add <file>  # works
-git commit      # works
+git -C /path/to/vault status           # denied — managed path in argument
+git --git-dir=/path/to/vault/.git log  # denied — managed path in argument
+git --work-tree=/path/to/vault status  # denied — managed path in argument
 ```
 
-**How to apply:** always run git commands without explicit path flags. Never try `-C`, `--git-dir`, or `--work-tree` pointing at the vault — they will fail with a hook denial regardless of the specific git subcommand or flag combination. There is no workaround via path rewriting; the block is on the argument string, not the operation type.
+**How to apply:** when realm content needs to be committed, pushed, or otherwise touched by git, say so and stop — the human runs git from their own terminal, which the hook does not govern. There is no spelling of a git command an agent can run against a managed realm; do not retry with different flags, paths, or wrappers.
 
 ---
 

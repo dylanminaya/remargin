@@ -1832,3 +1832,151 @@ fn bash_rm_above_realm_root_undetected_silent_allows() {
     let stdin = event_json("Bash", "/x", &json!({ "command": "rm -rf /parent" }));
     assert_eq!(pretool(&system, &stdin), PretoolOutcome::SilentAllow);
 }
+
+// ---------------------------------------------------------------------
+// Fail closed from an in-realm cwd (rem-bbq4). A session whose event cwd
+// already sits at/below a trusted root can address managed files with
+// bare relative words (`grep pattern idea.md`) or path-less cwd-walkers
+// (`rg pattern`) that carry no path evidence and were never evaluated.
+// From such a cwd EVERY Bash command is denied unless every simple
+// command in it is the remargin CLI (still subject to cli_allowed).
+// ---------------------------------------------------------------------
+
+/// A realm restricting `path` whose folder policy also denies the CLI.
+fn restrict_with_cli_denied(path: &str) -> String {
+    format!("permissions:\n  cli_allowed: false\n  trusted_roots:\n    - path: {path}\n")
+}
+
+/// The original bug: a bare relative read from inside the trusted root has
+/// no path evidence, so the token loop never evaluated it. The fail-closed
+/// branch denies it, naming the in-realm cwd.
+#[test]
+fn in_realm_cwd_bare_relative_read_is_denied() {
+    let system = mock_with(&[("/r/.remargin.yaml", &restrict_yaml("secret"))]);
+    let stdin = event_json(
+        "Bash",
+        "/r/secret",
+        &json!({ "command": "grep pattern idea.md" }),
+    );
+    let decision = expect_deny(pretool(&system, &stdin));
+    assert!(
+        deny_reason(&decision).contains("/r/secret"),
+        "reason must name the in-realm cwd: {}",
+        deny_reason(&decision),
+    );
+}
+
+/// A path-less cwd-walker presents zero path tokens; from an in-realm cwd
+/// it would sweep the realm → `Deny`.
+#[test]
+fn in_realm_cwd_pathless_walker_is_denied() {
+    let system = mock_with(&[("/r/.remargin.yaml", &restrict_yaml("secret"))]);
+    let stdin = event_json("Bash", "/r/secret", &json!({ "command": "rg pattern" }));
+    assert!(matches!(pretool(&system, &stdin), PretoolOutcome::Deny(_)));
+}
+
+/// A bare relative native write would bypass comment preservation and
+/// signing entirely — the critical case → `Deny`. The substitution uses
+/// `,` delimiters: `s/x/y/` carries slashes (path evidence) and already
+/// denied collaterally on master, so only the slash-free form pins the
+/// bare-word gap itself.
+#[test]
+fn in_realm_cwd_bare_relative_write_is_denied() {
+    let system = mock_with(&[("/r/.remargin.yaml", &restrict_yaml("secret"))]);
+    let stdin = event_json(
+        "Bash",
+        "/r/secret",
+        &json!({ "command": "sed -i s,x,y, idea.md" }),
+    );
+    assert!(matches!(pretool(&system, &stdin), PretoolOutcome::Deny(_)));
+}
+
+/// git gets no carve-out: git inside a managed realm is the human's job,
+/// run from the human's own un-hooked terminal. The deny reuses the
+/// registry's git guidance.
+#[test]
+fn in_realm_cwd_git_is_denied_with_git_guidance() {
+    let system = mock_with(&[("/r/.remargin.yaml", &restrict_yaml("secret"))]);
+    let stdin = event_json(
+        "Bash",
+        "/r/secret",
+        &json!({ "command": "git commit -m msg" }),
+    );
+    let decision = expect_deny(pretool(&system, &stdin));
+    assert!(
+        deny_reason(&decision).contains("staged or moved by git"),
+        "reason must carry the git guidance: {}",
+        deny_reason(&decision),
+    );
+}
+
+/// The remargin CLI stays the sanctioned surface from an in-realm cwd —
+/// and stays subject to the folder-level `cli_allowed` policy.
+#[test]
+fn in_realm_cwd_remargin_cli_stays_allowed() {
+    let system = mock_with(&[("/r/.remargin.yaml", &restrict_yaml("secret"))]);
+    let stdin = event_json(
+        "Bash",
+        "/r/secret",
+        &json!({ "command": "remargin comments idea.md" }),
+    );
+    assert_eq!(pretool(&system, &stdin), PretoolOutcome::SilentAllow);
+
+    let denied = mock_with(&[("/r/.remargin.yaml", &restrict_with_cli_denied("secret"))]);
+    let denied_stdin = event_json(
+        "Bash",
+        "/r/secret",
+        &json!({ "command": "remargin comments idea.md" }),
+    );
+    let decision = expect_deny(pretool(&denied, &denied_stdin));
+    assert!(deny_reason(&decision).contains("cli_allowed: false"));
+}
+
+/// Compound smuggling: EVERY simple command must be the remargin CLI — a
+/// remargin-prefixed chain must not carry a second verb past the branch.
+#[test]
+fn in_realm_cwd_compound_with_remargin_prefix_still_denies() {
+    let system = mock_with(&[("/r/.remargin.yaml", &restrict_yaml("secret"))]);
+    let stdin = event_json(
+        "Bash",
+        "/r/secret",
+        &json!({ "command": "remargin ls . && grep x idea.md" }),
+    );
+    assert!(matches!(pretool(&system, &stdin), PretoolOutcome::Deny(_)));
+}
+
+/// Regression guards for the fail-closed branch: (a) bare words from a cwd
+/// NOT at/below a trusted root stay unevaluated; (b) an explicit restricted
+/// path in the args still denies from any cwd; (c) the in-command `cd`
+/// branch still denies from outside.
+#[test]
+fn in_realm_cwd_regression_guards_unchanged() {
+    let system = mock_with(&[("/r/.remargin.yaml", &restrict_yaml("secret"))]);
+
+    // (a) cwd = realm root, above the trusted root: bare relative words do
+    // not resolve into /r/secret, so the command stays allowed.
+    let bare_stdin = event_json("Bash", "/r", &json!({ "command": "grep pattern idea.md" }));
+    assert_eq!(pretool(&system, &bare_stdin), PretoolOutcome::SilentAllow);
+
+    // (b) explicit managed path from an unrelated cwd still denies.
+    let explicit_stdin = event_json(
+        "Bash",
+        "/tmp",
+        &json!({ "command": "cat /r/secret/foo.md" }),
+    );
+    assert!(matches!(
+        pretool(&system, &explicit_stdin),
+        PretoolOutcome::Deny(_)
+    ));
+
+    // (c) tracked cd into the realm then a bare-word read still denies.
+    let cd_stdin = event_json(
+        "Bash",
+        "/x",
+        &json!({ "command": "cd /r/secret && grep x idea.md" }),
+    );
+    assert!(matches!(
+        pretool(&system, &cd_stdin),
+        PretoolOutcome::Deny(_)
+    ));
+}
