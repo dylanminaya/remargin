@@ -497,9 +497,9 @@ fn no_identity_no_author() {
 // -------------------------------------------------------------------
 // Authenticated document author gate (`ensure_frontmatter_authored`).
 //
-// The rem-4l87 QA matrix: create stamps the caller identity (ignoring
-// any spoofed value), edits are gated by the realm mode. `config` is
-// assumed already escalated to the doc's realm.
+// Create stamps the caller identity (ignoring any spoofed value),
+// edits are gated by the realm mode. `config` is assumed already
+// escalated to the doc's realm.
 // -------------------------------------------------------------------
 
 fn strict_config(identity: Option<&str>) -> ResolvedConfig {

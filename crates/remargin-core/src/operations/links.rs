@@ -28,10 +28,9 @@ use crate::frontmatter;
 
 /// Frontmatter properties recognized as relations in v1.
 ///
-/// FUTURE-CONFIGURABLE: this set is hardcoded for now. A follow-up makes
-/// the recognized-property set a config knob (see rem-339p "Out of
-/// scope"); until then `up` and `related` are the only frontmatter keys
-/// whose values count as links.
+/// Hardcoded for now; until the recognized-property set becomes a config
+/// knob, `up` and `related` are the only frontmatter keys whose values
+/// count as links.
 const RELATION_PROPERTIES: &[&str] = &["up", "related"];
 
 /// Column names for [`CompactLinkRow`], emitted once per response.

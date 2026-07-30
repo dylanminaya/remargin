@@ -1834,12 +1834,9 @@ fn bash_rm_above_realm_root_undetected_silent_allows() {
 }
 
 // ---------------------------------------------------------------------
-// Fail closed from an in-realm cwd (rem-bbq4). A session whose event cwd
-// already sits at/below a trusted root can address managed files with
-// bare relative words (`grep pattern idea.md`) or path-less cwd-walkers
-// (`rg pattern`) that carry no path evidence and were never evaluated.
-// From such a cwd EVERY Bash command is denied unless every simple
-// command in it is the remargin CLI (still subject to cli_allowed).
+// Fail closed from an in-realm cwd: bare relative words and path-less
+// cwd-walkers carry no path evidence, so every Bash command from such a
+// cwd is denied unless every simple command is the remargin CLI.
 // ---------------------------------------------------------------------
 
 /// A realm restricting `path` whose folder policy also denies the CLI.

@@ -414,11 +414,8 @@ fn bash_decision(
         return PretoolOutcome::Deny(build_cli_denied_decision());
     }
 
-    // Fail closed from in-realm ground: a cwd at/below a trusted root lets
-    // bare relative words (`grep pattern idea.md`) and path-less walkers
-    // (`rg pattern`) address managed files with zero path evidence, so no
-    // token scan can prove the command safe. Every command from such a cwd
-    // is denied unless every simple command in it is the remargin CLI.
+    // From an in-realm cwd, bare relative words carry no path evidence and
+    // no token scan can prove the command safe — fail closed.
     let canonical_cwd = canonicalize_existing_prefix(system, &lexical_normalize(event_cwd));
     let resolved_cwd = match resolve_for_target(system, &canonical_cwd) {
         Ok(value) => value,
@@ -565,20 +562,15 @@ fn first_verb_is_remargin(commands: &[Vec<String>]) -> bool {
         == Some("remargin")
 }
 
-/// `true` when EVERY simple command's verb is `remargin` — the only surface
-/// sanctioned from an in-realm cwd. [`first_verb_is_remargin`] checks the
-/// first command only (the CLI policy denies on the leading verb); here a
-/// compound command must not smuggle a second verb past the fail-closed
-/// branch, so all of them are checked.
+/// `true` when EVERY simple command's verb is `remargin` — a compound
+/// command must not smuggle a second verb past the fail-closed branch.
 fn all_verbs_are_remargin(commands: &[Vec<String>]) -> bool {
     commands
         .iter()
         .all(|tokens| command_verb(tokens).map(|(_, name)| name) == Some("remargin"))
 }
 
-/// The first simple command whose verb is not the remargin CLI — the one
-/// that tripped the fail-closed branch. Yields the tokens, the verb index,
-/// and the verb for guidance lookup.
+/// The first simple command whose verb is not the remargin CLI.
 fn first_non_remargin_command(commands: &[Vec<String>]) -> Option<(&[String], usize, &str)> {
     commands.iter().find_map(|tokens| {
         let (idx, name) = command_verb(tokens)?;
@@ -1084,12 +1076,7 @@ fn no_equivalent_message(matched_path: &str, realm_root: &Path) -> String {
     )
 }
 
-/// Deny for a Bash command issued from a cwd that itself resolves at/below
-/// a trusted root. Bare relative words carry no path evidence, so from
-/// in-realm ground no token scan can prove the command safe — the denial is
-/// wholesale. Names the cwd and the realm, then reuses the per-verb
-/// guidance registry for the first non-remargin verb when it has a
-/// remargin equivalent.
+/// Deny for a Bash command issued from a cwd inside a trusted root.
 fn build_in_realm_cwd_decision(
     cwd: &Path,
     realm_root: &Path,

@@ -2228,8 +2228,7 @@ fn rm_removes_empty_directory() {
 
 #[test]
 fn rm_deletes_non_markdown_binary_file() {
-    // Real PNG signature — invalid UTF-8 (starts with 0x89), the file
-    // class that reproduced rem-q0he live.
+    // Real PNG signature — invalid UTF-8 (starts with 0x89).
     let png: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xd8];
     let system = MockSystem::new()
         .with_current_dir("/project")
@@ -3529,7 +3528,7 @@ fn project_write_missing_comment_rejected_like_real_write() {
 }
 
 // ---------------------------------------------------------------------
-// rem-4l87: document author is authenticated at the write/replace/plan
+// Document author is authenticated at the write/replace/plan
 // seams. Each seam escalates to the doc's realm (the realm is the sole
 // source of truth for the mode), stamps the caller identity on create,
 // and gates author changes on edit. These tests exercise the escalation
