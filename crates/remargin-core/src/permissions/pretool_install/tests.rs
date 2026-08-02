@@ -5,12 +5,29 @@ use os_shim::mock::MockSystem;
 use serde_json::{Value, json};
 
 use super::{
-    HOOK_COMMAND, HOOK_MATCHER, InstallOutcome, TestOutcome, UninstallOutcome, install, test,
-    uninstall,
+    HOOK_MATCHER, HOOK_SUBCOMMAND, InstallOutcome, LEGACY_HOOK_COMMAND, TestOutcome,
+    UninstallOutcome, install, test, uninstall,
 };
+
+const EXE: &str = "/opt/bin/remargin";
 
 fn settings_path() -> PathBuf {
     PathBuf::from("/home/u/.claude/settings.json")
+}
+
+/// A mock whose `current_exe` is the binary the installer must embed, and
+/// which has that binary on disk so the entry reads as live.
+fn mock() -> MockSystem {
+    MockSystem::new()
+        .with_current_exe(Path::new(EXE))
+        .unwrap()
+        .with_file(Path::new(EXE), b"binary")
+        .unwrap()
+}
+
+/// The command a fresh install writes.
+fn hook_command() -> String {
+    format!("{EXE} {HOOK_SUBCOMMAND}")
 }
 
 fn read_json(system: &dyn System, path: &Path) -> Value {
@@ -22,9 +39,23 @@ fn seed(system: MockSystem, path: &Path, body: &str) -> MockSystem {
     system.with_file(path, body.as_bytes()).unwrap()
 }
 
+/// Destructure a `Broken` outcome without a `panic!` (denied by clippy).
+/// The `matches!` assert carries the diagnostic; the else arm is
+/// unreachable.
+fn expect_broken(outcome: TestOutcome) -> String {
+    assert!(
+        matches!(outcome, TestOutcome::Broken(_)),
+        "expected Broken, got {outcome:?}",
+    );
+    let TestOutcome::Broken(reason) = outcome else {
+        return String::new();
+    };
+    reason
+}
+
 #[test]
 fn install_writes_hook_when_settings_missing() {
-    let system = MockSystem::new();
+    let system = mock();
     let path = settings_path();
 
     let outcome = install(&system, &path).unwrap();
@@ -36,12 +67,12 @@ fn install_writes_hook_when_settings_missing() {
     assert_eq!(entries[0]["matcher"].as_str().unwrap(), HOOK_MATCHER);
     let hooks_arr = entries[0]["hooks"].as_array().unwrap();
     assert_eq!(hooks_arr[0]["type"].as_str().unwrap(), "command");
-    assert_eq!(hooks_arr[0]["command"].as_str().unwrap(), HOOK_COMMAND);
+    assert_eq!(hooks_arr[0]["command"].as_str().unwrap(), hook_command());
 }
 
 #[test]
 fn install_is_idempotent_on_already_installed_entry() {
-    let system = MockSystem::new();
+    let system = mock();
     let path = settings_path();
 
     assert_eq!(install(&system, &path).unwrap(), InstallOutcome::Installed);
@@ -63,7 +94,7 @@ fn install_preserves_unrelated_top_level_keys() {
     }))
     .unwrap();
     let path = settings_path();
-    let system = seed(MockSystem::new(), &path, &body);
+    let system = seed(mock(), &path, &body);
 
     install(&system, &path).unwrap();
 
@@ -92,7 +123,7 @@ fn install_preserves_unrelated_pretool_entries() {
     }))
     .unwrap();
     let path = settings_path();
-    let system = seed(MockSystem::new(), &path, &body);
+    let system = seed(mock(), &path, &body);
 
     install(&system, &path).unwrap();
 
@@ -104,7 +135,7 @@ fn install_preserves_unrelated_pretool_entries() {
         .any(|e| e["hooks"][0]["command"].as_str() == Some("other-tool"));
     let has_remargin = entries
         .iter()
-        .any(|e| e["hooks"][0]["command"].as_str() == Some(HOOK_COMMAND));
+        .any(|e| e["hooks"][0]["command"].as_str() == Some(hook_command().as_str()));
     assert!(has_other);
     assert!(has_remargin);
 }
@@ -123,7 +154,7 @@ fn uninstall_removes_only_remargin_entry() {
                 {
                     "matcher": HOOK_MATCHER,
                     "hooks": [
-                        { "type": "command", "command": HOOK_COMMAND },
+                        { "type": "command", "command": LEGACY_HOOK_COMMAND },
                     ],
                 },
             ],
@@ -131,7 +162,7 @@ fn uninstall_removes_only_remargin_entry() {
     }))
     .unwrap();
     let path = settings_path();
-    let system = seed(MockSystem::new(), &path, &body);
+    let system = seed(mock(), &path, &body);
 
     let outcome = uninstall(&system, &path).unwrap();
     assert_eq!(outcome, UninstallOutcome::Uninstalled);
@@ -147,7 +178,7 @@ fn uninstall_removes_only_remargin_entry() {
 
 #[test]
 fn uninstall_no_op_when_settings_file_missing() {
-    let system = MockSystem::new();
+    let system = mock();
     let path = settings_path();
     let outcome = uninstall(&system, &path).unwrap();
     assert_eq!(outcome, UninstallOutcome::NotInstalled);
@@ -158,7 +189,7 @@ fn uninstall_no_op_when_settings_file_missing() {
 fn uninstall_no_op_when_entry_absent() {
     let body = serde_json::to_string_pretty(&json!({ "model": "claude-opus" })).unwrap();
     let path = settings_path();
-    let system = seed(MockSystem::new(), &path, &body);
+    let system = seed(mock(), &path, &body);
 
     let outcome = uninstall(&system, &path).unwrap();
     assert_eq!(outcome, UninstallOutcome::NotInstalled);
@@ -172,7 +203,7 @@ fn uninstall_removes_empty_pretool_array_and_hooks_object() {
                 {
                     "matcher": HOOK_MATCHER,
                     "hooks": [
-                        { "type": "command", "command": HOOK_COMMAND },
+                        { "type": "command", "command": LEGACY_HOOK_COMMAND },
                     ],
                 },
             ],
@@ -181,7 +212,7 @@ fn uninstall_removes_empty_pretool_array_and_hooks_object() {
     }))
     .unwrap();
     let path = settings_path();
-    let system = seed(MockSystem::new(), &path, &body);
+    let system = seed(mock(), &path, &body);
 
     uninstall(&system, &path).unwrap();
 
@@ -192,7 +223,7 @@ fn uninstall_removes_empty_pretool_array_and_hooks_object() {
 
 #[test]
 fn test_reports_installed_when_entry_present() {
-    let system = MockSystem::new();
+    let system = mock();
     let path = settings_path();
     install(&system, &path).unwrap();
     assert_eq!(test(&system, &path).unwrap(), TestOutcome::Installed);
@@ -200,7 +231,7 @@ fn test_reports_installed_when_entry_present() {
 
 #[test]
 fn test_reports_not_installed_when_file_missing() {
-    let system = MockSystem::new();
+    let system = mock();
     let path = settings_path();
     assert_eq!(test(&system, &path).unwrap(), TestOutcome::NotInstalled);
 }
@@ -209,14 +240,14 @@ fn test_reports_not_installed_when_file_missing() {
 fn test_reports_not_installed_when_entry_absent() {
     let body = serde_json::to_string_pretty(&json!({ "model": "claude-opus" })).unwrap();
     let path = settings_path();
-    let system = seed(MockSystem::new(), &path, &body);
+    let system = seed(mock(), &path, &body);
     assert_eq!(test(&system, &path).unwrap(), TestOutcome::NotInstalled);
 }
 
 /// A remargin entry whose matcher has drifted from the current
-/// `HOOK_MATCHER` (an older installation) is still detected as installed —
-/// detection keys on `HOOK_COMMAND` — and `install` upgrades the matcher
-/// in place without duplicating the entry.
+/// `HOOK_MATCHER` (an older installation) is still recognized — detection
+/// keys on `HOOK_SUBCOMMAND` — and `install` upgrades the matcher in place
+/// without duplicating the entry.
 #[test]
 fn install_upgrades_drifted_matcher_in_place() {
     let stale_matcher = "Read|Write|Edit|Bash|NotebookEdit";
@@ -226,7 +257,7 @@ fn install_upgrades_drifted_matcher_in_place() {
                 {
                     "matcher": stale_matcher,
                     "hooks": [
-                        { "type": "command", "command": HOOK_COMMAND },
+                        { "type": "command", "command": LEGACY_HOOK_COMMAND },
                     ],
                 },
             ],
@@ -234,10 +265,13 @@ fn install_upgrades_drifted_matcher_in_place() {
     }))
     .unwrap();
     let path = settings_path();
-    let system = seed(MockSystem::new(), &path, &body);
+    let system = seed(mock(), &path, &body);
 
-    // Detected as installed despite the stale matcher string.
-    assert_eq!(test(&system, &path).unwrap(), TestOutcome::Installed);
+    // Recognized despite the stale matcher string.
+    assert_eq!(
+        test(&system, &path).unwrap(),
+        TestOutcome::PathRelative(String::from(LEGACY_HOOK_COMMAND)),
+    );
 
     // Install rewrites the matcher in place and reports the write.
     assert_eq!(install(&system, &path).unwrap(), InstallOutcome::Installed);
@@ -248,7 +282,7 @@ fn install_upgrades_drifted_matcher_in_place() {
     assert_eq!(entries[0]["matcher"].as_str().unwrap(), HOOK_MATCHER);
     assert_eq!(
         entries[0]["hooks"][0]["command"].as_str().unwrap(),
-        HOOK_COMMAND,
+        hook_command(),
     );
 
     // A second install is now a no-op.
@@ -256,6 +290,86 @@ fn install_upgrades_drifted_matcher_in_place() {
         install(&system, &path).unwrap(),
         InstallOutcome::AlreadyInstalled,
     );
+}
+
+/// The binary the entry names is gone: the hook cannot spawn, and Claude
+/// Code treats that as non-blocking, so `test` reports it as broken rather
+/// than installed. The fault names the settings file and the binary.
+#[test]
+fn test_reports_broken_when_binary_vanished() {
+    // The install resolves `current_exe`, but that binary is never on disk
+    // — the state a user reaches by moving or deleting it after installing.
+    let system = MockSystem::new().with_current_exe(Path::new(EXE)).unwrap();
+    let path = settings_path();
+    install(&system, &path).unwrap();
+
+    let reason = expect_broken(test(&system, &path).unwrap());
+    assert!(
+        reason.contains(EXE) && reason.contains("does not exist"),
+        "fault should name the vanished binary: {reason}",
+    );
+}
+
+/// An entry left by an install that predates the absolute path is
+/// recognized, reported as `PATH`-relative, and left exactly as found —
+/// only `install` rewrites a user's settings.
+#[test]
+fn test_reports_path_relative_legacy_entry_without_rewriting_it() {
+    let body = serde_json::to_string_pretty(&json!({
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": HOOK_MATCHER,
+                    "hooks": [
+                        { "type": "command", "command": LEGACY_HOOK_COMMAND },
+                    ],
+                },
+            ],
+        },
+    }))
+    .unwrap();
+    let path = settings_path();
+    let system = seed(mock(), &path, &body);
+
+    assert_eq!(
+        test(&system, &path).unwrap(),
+        TestOutcome::PathRelative(String::from(LEGACY_HOOK_COMMAND)),
+    );
+    assert_eq!(system.read_to_string(&path).unwrap(), body);
+}
+
+/// Reinstalling over a legacy entry rewrites its command in place — one
+/// entry, now absolute — and a stale absolute path is repaired the same
+/// way.
+#[test]
+fn install_rewrites_drifted_command_in_place() {
+    let stale = "/gone/remargin claude pretool";
+    let body = serde_json::to_string_pretty(&json!({
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": HOOK_MATCHER,
+                    "hooks": [
+                        { "type": "command", "command": stale },
+                    ],
+                },
+            ],
+        },
+    }))
+    .unwrap();
+    let path = settings_path();
+    let system = seed(mock(), &path, &body);
+
+    assert_eq!(install(&system, &path).unwrap(), InstallOutcome::Installed);
+
+    let value = read_json(&system, &path);
+    let entries = value["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0]["hooks"][0]["command"].as_str().unwrap(),
+        hook_command(),
+    );
+    assert_eq!(test(&system, &path).unwrap(), TestOutcome::Installed);
 }
 
 /// `uninstall` removes a remargin entry even when its matcher has drifted
@@ -269,7 +383,7 @@ fn uninstall_removes_entry_with_drifted_matcher() {
                 {
                     "matcher": stale_matcher,
                     "hooks": [
-                        { "type": "command", "command": HOOK_COMMAND },
+                        { "type": "command", "command": LEGACY_HOOK_COMMAND },
                     ],
                 },
             ],
@@ -277,7 +391,7 @@ fn uninstall_removes_entry_with_drifted_matcher() {
     }))
     .unwrap();
     let path = settings_path();
-    let system = seed(MockSystem::new(), &path, &body);
+    let system = seed(mock(), &path, &body);
 
     assert_eq!(
         uninstall(&system, &path).unwrap(),

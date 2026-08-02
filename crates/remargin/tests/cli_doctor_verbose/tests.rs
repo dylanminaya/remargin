@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -45,6 +46,14 @@ fn assert_status(out: &Output, expected: i32) {
     );
 }
 
+/// The hook command a current install writes: the absolute path of the
+/// binary under test plus the dispatch subcommand. A bare command name
+/// would read as an older install and earn its own warning, which is not
+/// what these fixtures are about.
+fn hook_command(subcommand: &str) -> String {
+    format!("{} {subcommand}", cargo_bin("remargin").display())
+}
+
 /// Build a JSON settings file containing both enforcement hooks — the
 /// `PreToolUse` hook and the `SessionStart` guard — so `doctor` reports a
 /// fully clean stack.
@@ -55,14 +64,14 @@ fn hook_settings_json() -> String {
                 {
                     "matcher": "Read|Write|Edit|Bash|NotebookEdit",
                     "hooks": [
-                        { "type": "command", "command": "remargin claude pretool" }
+                        { "type": "command", "command": hook_command("claude pretool") }
                     ]
                 }
             ],
             "SessionStart": [
                 {
                     "hooks": [
-                        { "type": "command", "command": "remargin claude session-guard" }
+                        { "type": "command", "command": hook_command("claude session-guard") }
                     ]
                 }
             ]
@@ -408,7 +417,7 @@ fn pretool_only_settings_json() -> String {
                 {
                     "matcher": "Read|Write|Edit|Bash|NotebookEdit",
                     "hooks": [
-                        { "type": "command", "command": "remargin claude pretool" }
+                        { "type": "command", "command": hook_command("claude pretool") }
                     ]
                 }
             ]

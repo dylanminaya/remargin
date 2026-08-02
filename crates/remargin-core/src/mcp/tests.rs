@@ -20,7 +20,7 @@ use crate::config::{Mode, ResolvedConfig};
 use crate::mcp;
 use crate::operations::{CreateCommentParams, create_comment};
 use crate::parser::{self, AuthorType};
-use crate::permissions::pretool_install::{HOOK_COMMAND, HOOK_MATCHER};
+use crate::permissions::pretool_install::{HOOK_MATCHER, HOOK_SUBCOMMAND};
 use crate::writer::InsertPosition;
 
 /// Document with two comments for expanded query tests.
@@ -2617,10 +2617,12 @@ fn mcp_query_compact_include_integrity_widens_rows() {
 /// project-local settings carry a stale `Bash(remargin *)` deny. The full
 /// doctor run trips both `SessionGuardMissing` and `LeftoverProjectedRule`.
 fn doctor_two_finding_system() -> MockSystem {
+    let exe = "/opt/bin/remargin";
+    let command = format!("{exe} {HOOK_SUBCOMMAND}");
     let user_settings = json!({
         "hooks": {
             "PreToolUse": [
-                { "matcher": HOOK_MATCHER, "hooks": [ { "type": "command", "command": HOOK_COMMAND } ] }
+                { "matcher": HOOK_MATCHER, "hooks": [ { "type": "command", "command": command } ] }
             ]
         }
     })
@@ -2630,6 +2632,8 @@ fn doctor_two_finding_system() -> MockSystem {
         .with_dir(Path::new("/r"))
         .unwrap()
         .with_dir(Path::new("/r/.claude"))
+        .unwrap()
+        .with_file(Path::new(exe), b"binary")
         .unwrap()
         .with_file(
             Path::new("/home/u/.claude/settings.json"),

@@ -11,8 +11,23 @@ use crate::permissions::doctor::{
     CheckName, DoctorFinding, DoctorReport, FindingKind, Severity, render_doctor_prompt,
     render_doctor_text,
 };
-use crate::permissions::pretool_install::{HOOK_COMMAND, HOOK_MATCHER};
-use crate::permissions::session_guard_install::SESSION_HOOK_COMMAND;
+use crate::permissions::pretool_install::{HOOK_MATCHER, HOOK_SUBCOMMAND};
+use crate::permissions::session_guard_install::SESSION_HOOK_SUBCOMMAND;
+
+/// The binary both Claude hook commands name. Present in every mock below,
+/// so the seeded entries read as live rather than stale. Deliberately not
+/// the path the goose cases use for a binary that is *gone*.
+const EXE: &str = "/usr/local/bin/remargin";
+
+/// The `PreToolUse` command a current install writes.
+fn hook_command() -> String {
+    format!("{EXE} {HOOK_SUBCOMMAND}")
+}
+
+/// The `SessionStart` command a current install writes.
+fn guard_command() -> String {
+    format!("{EXE} {SESSION_HOOK_SUBCOMMAND}")
+}
 
 /// Test shim: [`run_doctor`](super::run_doctor) with the default (all
 /// checks) selection, so the pre-existing call sites stay byte-identical
@@ -34,14 +49,39 @@ fn hook_settings_json() -> String {
                 {
                     "matcher": HOOK_MATCHER,
                     "hooks": [
-                        { "type": "command", "command": HOOK_COMMAND }
+                        { "type": "command", "command": hook_command() }
                     ]
                 }
             ],
             "SessionStart": [
                 {
                     "hooks": [
-                        { "type": "command", "command": SESSION_HOOK_COMMAND }
+                        { "type": "command", "command": guard_command() }
+                    ]
+                }
+            ]
+        }
+    });
+    serde_json::to_string_pretty(&v).unwrap()
+}
+
+/// Settings carrying both hooks, each running exactly the command given —
+/// the fixture for entries an older install wrote, or whose binary moved.
+fn settings_json_with_commands(pretool: &str, guard: &str) -> String {
+    let v = json!({
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": HOOK_MATCHER,
+                    "hooks": [
+                        { "type": "command", "command": pretool }
+                    ]
+                }
+            ],
+            "SessionStart": [
+                {
+                    "hooks": [
+                        { "type": "command", "command": guard }
                     ]
                 }
             ]
@@ -59,7 +99,7 @@ fn pretool_only_settings_json() -> String {
                 {
                     "matcher": HOOK_MATCHER,
                     "hooks": [
-                        { "type": "command", "command": HOOK_COMMAND }
+                        { "type": "command", "command": hook_command() }
                     ]
                 }
             ]
@@ -75,7 +115,7 @@ fn guard_only_settings_json() -> String {
             "SessionStart": [
                 {
                     "hooks": [
-                        { "type": "command", "command": SESSION_HOOK_COMMAND }
+                        { "type": "command", "command": guard_command() }
                     ]
                 }
             ]
@@ -101,6 +141,8 @@ fn mock_with_files(files: &[(&str, &str)]) -> MockSystem {
         .with_dir(Path::new("/r"))
         .unwrap()
         .with_dir(Path::new("/r/.claude"))
+        .unwrap()
+        .with_file(Path::new(EXE), b"binary")
         .unwrap();
     for (path, body) in files {
         system = system.with_file(Path::new(path), body.as_bytes()).unwrap();
@@ -166,6 +208,154 @@ fn hook_absent_from_both_scopes_reports_hook_missing() {
         finding.remedy.contains("pretool install"),
         "remedy should mention pretool install: {}",
         finding.remedy
+    );
+}
+
+/// The entry is registered but names a binary that is gone. Claude Code
+/// treats a command it cannot spawn as non-blocking, which is the same
+/// exposure as no entry at all, so the gate fails — and the finding names
+/// the fault and a reinstall rather than a first install.
+#[test]
+fn stale_hook_binary_fails_the_gate_and_names_the_fault() {
+    let settings = settings_json_with_commands(
+        &format!("/gone/remargin {HOOK_SUBCOMMAND}"),
+        &guard_command(),
+    );
+    let system = mock_with_file("/home/u/.claude/settings.json", &settings);
+    let report = run_doctor(
+        &system,
+        Path::new("/r"),
+        Path::new("/home/u/.claude/settings.json"),
+    )
+    .unwrap();
+
+    assert!(!report.hook_installed, "stale binary is not enforcement");
+    assert_eq!(kinds(&report), vec![FindingKind::HookMissing]);
+    let finding = &report.findings[0];
+    assert_eq!(finding.severity, Severity::Critical);
+    assert!(
+        finding.message.contains("/gone/remargin")
+            && finding.message.contains("does not exist")
+            && finding.message.contains("/home/u/.claude/settings.json"),
+        "message should name the vanished binary and the file: {}",
+        finding.message,
+    );
+    assert!(
+        finding.remedy.contains("pretool install"),
+        "remedy should name the reinstall: {}",
+        finding.remedy,
+    );
+}
+
+/// An entry an older install left behind still enforces while `PATH`
+/// resolves it, so the gate passes — with a warning naming the file, the
+/// command, and the reinstall that rewrites it.
+#[test]
+fn path_relative_hook_entry_passes_the_gate_with_a_warning() {
+    let legacy = format!("remargin {HOOK_SUBCOMMAND}");
+    let settings = settings_json_with_commands(&legacy, &guard_command());
+    let system = mock_with_file("/home/u/.claude/settings.json", &settings);
+    let report = run_doctor(
+        &system,
+        Path::new("/r"),
+        Path::new("/home/u/.claude/settings.json"),
+    )
+    .unwrap();
+
+    assert!(report.hook_installed, "a PATH-resolved entry still gates");
+    assert_eq!(kinds(&report), vec![FindingKind::HookPathRelative]);
+    let finding = &report.findings[0];
+    assert_eq!(finding.severity, Severity::Warning);
+    assert!(
+        finding.message.contains(&legacy)
+            && finding.message.contains("/home/u/.claude/settings.json"),
+        "message should name the command and the file: {}",
+        finding.message,
+    );
+    assert!(
+        finding.remedy.contains("pretool install"),
+        "remedy should name the reinstall: {}",
+        finding.remedy,
+    );
+}
+
+/// The same for the backstop: a `PATH`-relative guard entry is registered,
+/// so `SessionGuardMissing` stays silent and the warning names the guard's
+/// own reinstall.
+#[test]
+fn path_relative_session_guard_entry_warns_instead_of_missing() {
+    let legacy = format!("remargin {SESSION_HOOK_SUBCOMMAND}");
+    let settings = settings_json_with_commands(&hook_command(), &legacy);
+    let system = mock_with_file("/home/u/.claude/settings.json", &settings);
+    let report = run_doctor(
+        &system,
+        Path::new("/r"),
+        Path::new("/home/u/.claude/settings.json"),
+    )
+    .unwrap();
+
+    assert!(report.session_guard_installed);
+    assert_eq!(kinds(&report), vec![FindingKind::HookPathRelative]);
+    assert!(
+        report.findings[0].remedy.contains("session-guard install"),
+        "remedy should name the guard's install: {}",
+        report.findings[0].remedy,
+    );
+}
+
+/// A backstop whose binary is gone runs at no session, so it reports as
+/// missing — with the fault named and a reinstall as the repair.
+#[test]
+fn stale_session_guard_binary_reports_missing_with_the_fault() {
+    let settings = settings_json_with_commands(
+        &hook_command(),
+        &format!("/gone/remargin {SESSION_HOOK_SUBCOMMAND}"),
+    );
+    let system = mock_with_file("/home/u/.claude/settings.json", &settings);
+    let report = run_doctor(
+        &system,
+        Path::new("/r"),
+        Path::new("/home/u/.claude/settings.json"),
+    )
+    .unwrap();
+
+    assert!(report.hook_installed, "the PreToolUse entry is untouched");
+    assert!(!report.session_guard_installed);
+    assert_eq!(kinds(&report), vec![FindingKind::SessionGuardMissing]);
+    let finding = &report.findings[0];
+    assert!(
+        finding.message.contains("/gone/remargin"),
+        "message should name the vanished binary: {}",
+        finding.message,
+    );
+    assert!(
+        finding.remedy.contains("session-guard install"),
+        "remedy should name the reinstall: {}",
+        finding.remedy,
+    );
+}
+
+/// The `PATH`-relative warning belongs to the check that owns the entry, so
+/// selecting only the other check drops it.
+#[test]
+fn path_relative_findings_follow_their_check_selection() {
+    let settings = settings_json_with_commands(
+        &format!("remargin {HOOK_SUBCOMMAND}"),
+        &format!("remargin {SESSION_HOOK_SUBCOMMAND}"),
+    );
+    let system = mock_with_file("/home/u/.claude/settings.json", &settings);
+    let report = super::run_doctor(
+        &system,
+        Path::new("/r"),
+        Path::new("/home/u/.claude/settings.json"),
+        &CheckName::parse_set("hook").unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(kinds(&report), vec![FindingKind::HookPathRelative]);
+    assert!(
+        report.findings[0].remedy.contains("pretool install"),
+        "only the PreToolUse entry's warning survives: {report:#?}",
     );
 }
 
@@ -633,6 +823,8 @@ fn identity_mock(files: &[(&str, &str)]) -> MockSystem {
         .with_dir(Path::new("/r/.claude"))
         .unwrap()
         .with_env("HOME", "/home/u")
+        .unwrap()
+        .with_file(Path::new(EXE), b"binary")
         .unwrap()
         .with_file(
             Path::new("/home/u/.claude/settings.json"),

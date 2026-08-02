@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-use assert_cmd::cargo::CommandCargoExt as _;
+use assert_cmd::cargo::{CommandCargoExt as _, cargo_bin};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -399,9 +399,12 @@ fn pretool_install_local_writes_hook_to_project_settings() {
     let value: Value = serde_json::from_str(&body).unwrap();
     let entries = value["hooks"]["PreToolUse"].as_array().unwrap();
     assert_eq!(entries.len(), 1);
+    // The absolute path of the binary that ran the install, so a `PATH`
+    // miss can never turn the hook into a silent fail-open pass.
+    let expected = format!("{} claude pretool", cargo_bin("remargin").display());
     assert_eq!(
         entries[0]["hooks"][0]["command"].as_str().unwrap(),
-        "remargin claude pretool",
+        expected
     );
 }
 

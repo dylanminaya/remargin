@@ -95,6 +95,13 @@ const GOOSE_SESSION_SUBJECT: &str = "goose SessionStart guard";
 
 const GOOSE_MCP_SUBJECT: &str = "goose MCP extension";
 
+/// Same distinction for the two Claude entries, which share a settings
+/// file: a `PreToolUse` verdict and a `SessionStart` verdict are not read
+/// for each other.
+const PRETOOL_SUBJECT: &str = "PreToolUse hook";
+
+const SESSION_GUARD_SUBJECT: &str = "SessionStart guard";
+
 const fn author_type_str(at: &parser::AuthorType) -> &'static str {
     at.as_str()
 }
@@ -116,31 +123,20 @@ pub fn cmd_pretool_install(
     let cwd = env::current_dir().context("resolving current directory")?;
     let path = pretool_settings_path(system, &cwd, local)?;
     let outcome = pretool_install::install(system, &path)?;
-    let scope = scope_label(local);
     let status = match outcome {
         pretool_install::InstallOutcome::AlreadyInstalled => "already_installed",
         pretool_install::InstallOutcome::Installed => "installed",
         _ => "unknown",
     };
-    if json_mode {
-        print_output(
-            sinks,
-            true,
-            &json!({
-                "status": status,
-                "scope": scope,
-                "settings_file": path.display().to_string(),
-            }),
-        )
-    } else {
-        writeln!(
-            sinks.stderr,
-            "PreToolUse hook ({scope}): {status} at {}",
-            path.display(),
-        )
-        .context("writing to stderr")?;
-        Ok(())
-    }
+    emit_claude_hook_status(
+        sinks,
+        json_mode,
+        PRETOOL_SUBJECT,
+        scope_label(local),
+        status,
+        None,
+        &path,
+    )
 }
 
 pub fn cmd_pretool_uninstall(
@@ -152,31 +148,20 @@ pub fn cmd_pretool_uninstall(
     let cwd = env::current_dir().context("resolving current directory")?;
     let path = pretool_settings_path(system, &cwd, local)?;
     let outcome = pretool_install::uninstall(system, &path)?;
-    let scope = scope_label(local);
     let status = match outcome {
         pretool_install::UninstallOutcome::NotInstalled => "not_installed",
         pretool_install::UninstallOutcome::Uninstalled => "uninstalled",
         _ => "unknown",
     };
-    if json_mode {
-        print_output(
-            sinks,
-            true,
-            &json!({
-                "status": status,
-                "scope": scope,
-                "settings_file": path.display().to_string(),
-            }),
-        )
-    } else {
-        writeln!(
-            sinks.stderr,
-            "PreToolUse hook ({scope}): {status} at {}",
-            path.display(),
-        )
-        .context("writing to stderr")?;
-        Ok(())
-    }
+    emit_claude_hook_status(
+        sinks,
+        json_mode,
+        PRETOOL_SUBJECT,
+        scope_label(local),
+        status,
+        None,
+        &path,
+    )
 }
 
 pub fn cmd_pretool_test(
@@ -188,31 +173,22 @@ pub fn cmd_pretool_test(
     let cwd = env::current_dir().context("resolving current directory")?;
     let path = pretool_settings_path(system, &cwd, local)?;
     let outcome = pretool_install::test(system, &path)?;
-    let scope = scope_label(local);
-    let status = match outcome {
-        pretool_install::TestOutcome::Installed => "installed",
-        pretool_install::TestOutcome::NotInstalled => "not_installed",
-        _ => "unknown",
+    let (status, detail) = match outcome {
+        pretool_install::TestOutcome::Broken(reason) => ("broken", Some(reason)),
+        pretool_install::TestOutcome::Installed => ("installed", None),
+        pretool_install::TestOutcome::NotInstalled => ("not_installed", None),
+        pretool_install::TestOutcome::PathRelative(command) => ("path_relative", Some(command)),
+        _ => ("unknown", None),
     };
-    if json_mode {
-        print_output(
-            sinks,
-            true,
-            &json!({
-                "status": status,
-                "scope": scope,
-                "settings_file": path.display().to_string(),
-            }),
-        )
-    } else {
-        writeln!(
-            sinks.stderr,
-            "PreToolUse hook ({scope}): {status} at {}",
-            path.display(),
-        )
-        .context("writing to stderr")?;
-        Ok(())
-    }
+    emit_claude_hook_status(
+        sinks,
+        json_mode,
+        PRETOOL_SUBJECT,
+        scope_label(local),
+        status,
+        detail.as_deref(),
+        &path,
+    )
 }
 
 /// Resolve the guard plugin directory. User scope anchors at `$HOME`;
@@ -541,13 +517,20 @@ pub fn cmd_session_guard_install(
     let cwd = env::current_dir().context("resolving current directory")?;
     let path = pretool_settings_path(system, &cwd, local)?;
     let outcome = session_guard_install::install(system, &path)?;
-    let scope = scope_label(local);
     let status = match outcome {
         session_guard_install::InstallOutcome::AlreadyInstalled => "already_installed",
         session_guard_install::InstallOutcome::Installed => "installed",
         _ => "unknown",
     };
-    emit_session_guard_status(sinks, json_mode, scope, status, &path)
+    emit_claude_hook_status(
+        sinks,
+        json_mode,
+        SESSION_GUARD_SUBJECT,
+        scope_label(local),
+        status,
+        None,
+        &path,
+    )
 }
 
 pub fn cmd_session_guard_uninstall(
@@ -559,13 +542,20 @@ pub fn cmd_session_guard_uninstall(
     let cwd = env::current_dir().context("resolving current directory")?;
     let path = pretool_settings_path(system, &cwd, local)?;
     let outcome = session_guard_install::uninstall(system, &path)?;
-    let scope = scope_label(local);
     let status = match outcome {
         session_guard_install::UninstallOutcome::NotInstalled => "not_installed",
         session_guard_install::UninstallOutcome::Uninstalled => "uninstalled",
         _ => "unknown",
     };
-    emit_session_guard_status(sinks, json_mode, scope, status, &path)
+    emit_claude_hook_status(
+        sinks,
+        json_mode,
+        SESSION_GUARD_SUBJECT,
+        scope_label(local),
+        status,
+        None,
+        &path,
+    )
 }
 
 pub fn cmd_session_guard_test(
@@ -577,20 +567,37 @@ pub fn cmd_session_guard_test(
     let cwd = env::current_dir().context("resolving current directory")?;
     let path = pretool_settings_path(system, &cwd, local)?;
     let outcome = session_guard_install::test(system, &path)?;
-    let scope = scope_label(local);
-    let status = match outcome {
-        session_guard_install::TestOutcome::Installed => "installed",
-        session_guard_install::TestOutcome::NotInstalled => "not_installed",
-        _ => "unknown",
+    let (status, detail) = match outcome {
+        session_guard_install::TestOutcome::Broken(reason) => ("broken", Some(reason)),
+        session_guard_install::TestOutcome::Installed => ("installed", None),
+        session_guard_install::TestOutcome::NotInstalled => ("not_installed", None),
+        session_guard_install::TestOutcome::PathRelative(command) => {
+            ("path_relative", Some(command))
+        }
+        _ => ("unknown", None),
     };
-    emit_session_guard_status(sinks, json_mode, scope, status, &path)
+    emit_claude_hook_status(
+        sinks,
+        json_mode,
+        SESSION_GUARD_SUBJECT,
+        scope_label(local),
+        status,
+        detail.as_deref(),
+        &path,
+    )
 }
 
-fn emit_session_guard_status(
+/// Shared status render for both Claude hook lifecycles. `subject` names
+/// which entry the verdict is about — both families report over the same
+/// settings file. `detail` carries the fault behind a `broken` verdict and
+/// the command behind a `path_relative` one; every other status has none.
+fn emit_claude_hook_status(
     sinks: &mut IoSinks<'_>,
     json_mode: bool,
+    subject: &str,
     scope: &str,
     status: &str,
+    detail: Option<&str>,
     path: &Path,
 ) -> Result<()> {
     if json_mode {
@@ -600,13 +607,15 @@ fn emit_session_guard_status(
             &json!({
                 "status": status,
                 "scope": scope,
+                "detail": detail,
                 "settings_file": path.display().to_string(),
             }),
         )
     } else {
+        let suffix = detail.map_or_else(String::new, |reason| format!(" ({reason})"));
         writeln!(
             sinks.stderr,
-            "SessionStart guard ({scope}): {status} at {}",
+            "{subject} ({scope}): {status} at {}{suffix}",
             path.display(),
         )
         .context("writing to stderr")?;

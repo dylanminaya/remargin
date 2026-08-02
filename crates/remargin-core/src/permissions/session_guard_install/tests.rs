@@ -5,11 +5,29 @@ use os_shim::mock::MockSystem;
 use serde_json::{Value, json};
 
 use super::{
-    InstallOutcome, SESSION_HOOK_COMMAND, TestOutcome, UninstallOutcome, install, test, uninstall,
+    InstallOutcome, LEGACY_SESSION_HOOK_COMMAND, SESSION_HOOK_SUBCOMMAND, TestOutcome,
+    UninstallOutcome, install, test, uninstall,
 };
+
+const EXE: &str = "/opt/bin/remargin";
 
 fn settings_path() -> PathBuf {
     PathBuf::from("/home/u/.claude/settings.json")
+}
+
+/// A mock whose `current_exe` is the binary the installer must embed, and
+/// which has that binary on disk so the entry reads as live.
+fn mock() -> MockSystem {
+    MockSystem::new()
+        .with_current_exe(Path::new(EXE))
+        .unwrap()
+        .with_file(Path::new(EXE), b"binary")
+        .unwrap()
+}
+
+/// The command a fresh install writes.
+fn hook_command() -> String {
+    format!("{EXE} {SESSION_HOOK_SUBCOMMAND}")
 }
 
 fn read_json(system: &dyn System, path: &Path) -> Value {
@@ -23,7 +41,7 @@ fn seed(system: MockSystem, path: &Path, body: &str) -> MockSystem {
 
 #[test]
 fn install_writes_matcherless_hook_when_settings_missing() {
-    let system = MockSystem::new();
+    let system = mock();
     let path = settings_path();
 
     let outcome = install(&system, &path).unwrap();
@@ -36,16 +54,13 @@ fn install_writes_matcherless_hook_when_settings_missing() {
     assert!(entries[0].get("matcher").is_none());
     let hooks_arr = entries[0]["hooks"].as_array().unwrap();
     assert_eq!(hooks_arr[0]["type"].as_str().unwrap(), "command");
-    assert_eq!(
-        hooks_arr[0]["command"].as_str().unwrap(),
-        SESSION_HOOK_COMMAND
-    );
+    assert_eq!(hooks_arr[0]["command"].as_str().unwrap(), hook_command());
 }
 
 /// Case 5: a second install over an already-present guard is a no-op.
 #[test]
 fn install_is_idempotent_on_already_installed_entry() {
-    let system = MockSystem::new();
+    let system = mock();
     let path = settings_path();
 
     assert_eq!(install(&system, &path).unwrap(), InstallOutcome::Installed);
@@ -67,7 +82,7 @@ fn install_preserves_unrelated_top_level_keys() {
     }))
     .unwrap();
     let path = settings_path();
-    let system = seed(MockSystem::new(), &path, &body);
+    let system = seed(mock(), &path, &body);
 
     install(&system, &path).unwrap();
 
@@ -91,7 +106,7 @@ fn install_preserves_unrelated_session_entries() {
     }))
     .unwrap();
     let path = settings_path();
-    let system = seed(MockSystem::new(), &path, &body);
+    let system = seed(mock(), &path, &body);
 
     install(&system, &path).unwrap();
 
@@ -103,7 +118,7 @@ fn install_preserves_unrelated_session_entries() {
         .any(|e| e["hooks"][0]["command"].as_str() == Some("other-tool"));
     let has_remargin = entries
         .iter()
-        .any(|e| e["hooks"][0]["command"].as_str() == Some(SESSION_HOOK_COMMAND));
+        .any(|e| e["hooks"][0]["command"].as_str() == Some(hook_command().as_str()));
     assert!(has_other);
     assert!(has_remargin);
 }
@@ -120,7 +135,7 @@ fn uninstall_removes_only_remargin_entry() {
                 },
                 {
                     "hooks": [
-                        { "type": "command", "command": SESSION_HOOK_COMMAND },
+                        { "type": "command", "command": LEGACY_SESSION_HOOK_COMMAND },
                     ],
                 },
             ],
@@ -128,7 +143,7 @@ fn uninstall_removes_only_remargin_entry() {
     }))
     .unwrap();
     let path = settings_path();
-    let system = seed(MockSystem::new(), &path, &body);
+    let system = seed(mock(), &path, &body);
 
     let outcome = uninstall(&system, &path).unwrap();
     assert_eq!(outcome, UninstallOutcome::Uninstalled);
@@ -144,7 +159,7 @@ fn uninstall_removes_only_remargin_entry() {
 
 #[test]
 fn uninstall_no_op_when_settings_file_missing() {
-    let system = MockSystem::new();
+    let system = mock();
     let path = settings_path();
     let outcome = uninstall(&system, &path).unwrap();
     assert_eq!(outcome, UninstallOutcome::NotInstalled);
@@ -157,7 +172,7 @@ fn uninstall_removes_empty_session_array_and_hooks_object() {
             "SessionStart": [
                 {
                     "hooks": [
-                        { "type": "command", "command": SESSION_HOOK_COMMAND },
+                        { "type": "command", "command": LEGACY_SESSION_HOOK_COMMAND },
                     ],
                 },
             ],
@@ -166,7 +181,7 @@ fn uninstall_removes_empty_session_array_and_hooks_object() {
     }))
     .unwrap();
     let path = settings_path();
-    let system = seed(MockSystem::new(), &path, &body);
+    let system = seed(mock(), &path, &body);
 
     uninstall(&system, &path).unwrap();
 
@@ -177,7 +192,7 @@ fn uninstall_removes_empty_session_array_and_hooks_object() {
 
 #[test]
 fn test_reports_installed_when_entry_present() {
-    let system = MockSystem::new();
+    let system = mock();
     let path = settings_path();
     install(&system, &path).unwrap();
     assert_eq!(test(&system, &path).unwrap(), TestOutcome::Installed);
@@ -185,7 +200,7 @@ fn test_reports_installed_when_entry_present() {
 
 #[test]
 fn test_reports_not_installed_when_file_missing() {
-    let system = MockSystem::new();
+    let system = mock();
     let path = settings_path();
     assert_eq!(test(&system, &path).unwrap(), TestOutcome::NotInstalled);
 }
@@ -194,13 +209,14 @@ fn test_reports_not_installed_when_file_missing() {
 fn test_reports_not_installed_when_entry_absent() {
     let body = serde_json::to_string_pretty(&json!({ "model": "claude-opus" })).unwrap();
     let path = settings_path();
-    let system = seed(MockSystem::new(), &path, &body);
+    let system = seed(mock(), &path, &body);
     assert_eq!(test(&system, &path).unwrap(), TestOutcome::NotInstalled);
 }
 
 /// A user-annotated guard entry (a `matcher` was added) is still
-/// identified by its inner command — detection keys on the command, not
-/// the matcher — so install is a no-op and uninstall removes it.
+/// identified by its inner subcommand — detection keys on the command, not
+/// the matcher — so install rewrites that one entry in place, keeping the
+/// annotation, and uninstall removes it.
 #[test]
 fn entry_with_added_matcher_is_identified_by_command() {
     let body = serde_json::to_string_pretty(&json!({
@@ -209,7 +225,7 @@ fn entry_with_added_matcher_is_identified_by_command() {
                 {
                     "matcher": "startup",
                     "hooks": [
-                        { "type": "command", "command": SESSION_HOOK_COMMAND },
+                        { "type": "command", "command": LEGACY_SESSION_HOOK_COMMAND },
                     ],
                 },
             ],
@@ -217,17 +233,102 @@ fn entry_with_added_matcher_is_identified_by_command() {
     }))
     .unwrap();
     let path = settings_path();
-    let system = seed(MockSystem::new(), &path, &body);
+    let system = seed(mock(), &path, &body);
 
-    assert_eq!(test(&system, &path).unwrap(), TestOutcome::Installed);
     assert_eq!(
-        install(&system, &path).unwrap(),
-        InstallOutcome::AlreadyInstalled,
+        test(&system, &path).unwrap(),
+        TestOutcome::PathRelative(String::from(LEGACY_SESSION_HOOK_COMMAND)),
     );
+    assert_eq!(install(&system, &path).unwrap(), InstallOutcome::Installed);
+    let value = read_json(&system, &path);
+    let entries = value["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["matcher"].as_str().unwrap(), "startup");
+    assert_eq!(
+        entries[0]["hooks"][0]["command"].as_str().unwrap(),
+        hook_command(),
+    );
+
     assert_eq!(
         uninstall(&system, &path).unwrap(),
         UninstallOutcome::Uninstalled,
     );
+    let stripped = read_json(&system, &path);
+    assert!(stripped.get("hooks").is_none());
+}
+
+/// The binary the entry names is gone: the backstop cannot spawn, so
+/// `test` reports it broken rather than installed.
+#[test]
+fn test_reports_broken_when_binary_vanished() {
+    // The install resolves `current_exe`, but that binary is never on disk
+    // — the state a user reaches by moving or deleting it after installing.
+    let system = MockSystem::new().with_current_exe(Path::new(EXE)).unwrap();
+    let path = settings_path();
+    install(&system, &path).unwrap();
+
+    let outcome = test(&system, &path).unwrap();
+    assert!(
+        matches!(outcome, TestOutcome::Broken(_)),
+        "expected Broken, got {outcome:?}",
+    );
+}
+
+/// An entry left by an install that predates the absolute path is
+/// recognized, reported as `PATH`-relative, and left exactly as found —
+/// only `install` rewrites a user's settings.
+#[test]
+fn test_reports_path_relative_legacy_entry_without_rewriting_it() {
+    let body = serde_json::to_string_pretty(&json!({
+        "hooks": {
+            "SessionStart": [
+                {
+                    "hooks": [
+                        { "type": "command", "command": LEGACY_SESSION_HOOK_COMMAND },
+                    ],
+                },
+            ],
+        },
+    }))
+    .unwrap();
+    let path = settings_path();
+    let system = seed(mock(), &path, &body);
+
+    assert_eq!(
+        test(&system, &path).unwrap(),
+        TestOutcome::PathRelative(String::from(LEGACY_SESSION_HOOK_COMMAND)),
+    );
+    assert_eq!(system.read_to_string(&path).unwrap(), body);
+}
+
+/// Reinstalling over an entry whose absolute path went stale rewrites it in
+/// place rather than adding a second entry.
+#[test]
+fn install_rewrites_drifted_command_in_place() {
+    let stale = "/gone/remargin claude session-guard";
+    let body = serde_json::to_string_pretty(&json!({
+        "hooks": {
+            "SessionStart": [
+                {
+                    "hooks": [
+                        { "type": "command", "command": stale },
+                    ],
+                },
+            ],
+        },
+    }))
+    .unwrap();
+    let path = settings_path();
+    let system = seed(mock(), &path, &body);
+
+    assert_eq!(install(&system, &path).unwrap(), InstallOutcome::Installed);
+
     let value = read_json(&system, &path);
-    assert!(value.get("hooks").is_none());
+    let entries = value["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0]["hooks"][0]["command"].as_str().unwrap(),
+        hook_command(),
+    );
+    assert_eq!(test(&system, &path).unwrap(), TestOutcome::Installed);
 }

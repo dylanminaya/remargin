@@ -135,9 +135,12 @@ fn session_guard_install_local_writes_hook_to_project_settings() {
     let value: Value = serde_json::from_str(&body).unwrap();
     let entries = value["hooks"]["SessionStart"].as_array().unwrap();
     assert_eq!(entries.len(), 1);
+    // The absolute path of the binary that ran the install: a backstop that
+    // silently fails to spawn is worse than none.
+    let expected = format!("{} claude session-guard", cargo_bin("remargin").display());
     assert_eq!(
         entries[0]["hooks"][0]["command"].as_str().unwrap(),
-        "remargin claude session-guard",
+        expected
     );
 }
 

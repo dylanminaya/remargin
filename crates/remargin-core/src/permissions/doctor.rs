@@ -88,11 +88,21 @@ pub enum FindingKind {
     /// indistinguishable from a live one from inside a session. The
     /// `SessionStart` entry is the backstop that says so out loud.
     GooseSessionGuardMissing,
-    /// The `PreToolUse` hook (`remargin claude pretool`) is absent from
-    /// both user-scope and project-scope settings files. No CLI or
-    /// native-tool enforcement is active for any managed path in the
-    /// realm. All subsequent checks are skipped.
+    /// The `PreToolUse` hook (`remargin claude pretool`) is not live in
+    /// either the user-scope or the project-scope settings file: absent
+    /// from both, or declared with a command that cannot spawn because the
+    /// binary it names is gone. No CLI or native-tool enforcement is active
+    /// for any managed path in the realm. All subsequent checks are
+    /// skipped.
     HookMissing,
+    /// A Claude hook entry names the remargin binary by bare name rather
+    /// than absolute path — the form installs wrote before they embedded
+    /// it. Claude Code resolves it through `PATH` at spawn time and treats
+    /// a command it cannot find as non-blocking, so the entry is one `PATH`
+    /// change away from silently gating nothing. Reinstalling rewrites it;
+    /// doctor only reports, because rewriting a user's settings is
+    /// `install`'s job and not a diagnostic's.
+    HookPathRelative,
     /// Strict-mode realm whose resolved signing key does not point at an
     /// existing, readable file. Identity resolution admits a set-but-
     /// broken `key:`; the failure otherwise surfaces only inside a later
@@ -106,11 +116,12 @@ pub enum FindingKind {
     /// synchronizer no longer emits. Each finding names the file and the
     /// exact rule string.
     LeftoverProjectedRule,
-    /// The `SessionStart` guard (`remargin claude session-guard`) is
-    /// absent from both user-scope and project-scope settings files.
-    /// Without it, a broken enforcement path (e.g. `remargin` fell off
-    /// `PATH`) fails open silently — the guard is the fail-open backstop
-    /// that surfaces such a failure into the session.
+    /// The `SessionStart` guard (`remargin claude session-guard`) is not
+    /// live in either the user-scope or the project-scope settings file:
+    /// absent from both, or declared with a command that cannot spawn.
+    /// Without it, a broken enforcement path (e.g. the `PreToolUse` hook's
+    /// binary moved) fails open silently — the guard is the fail-open
+    /// backstop that surfaces such a failure into the session.
     SessionGuardMissing,
     /// A document's `sandbox:` frontmatter carries an `author@timestamp`
     /// entry whose author is not an active registry participant — a
@@ -197,6 +208,125 @@ impl DoctorReport {
     #[must_use]
     pub const fn is_clean(&self) -> bool {
         self.findings.is_empty()
+    }
+}
+
+/// Both Claude settings scopes, probed once per run.
+///
+/// Every verdict about the two hook entries — whether they are live, the
+/// fault when they are not, and the entries still naming the binary by bare
+/// name — is read off this one snapshot, so no two answers in a report can
+/// describe stacks observed at different moments.
+struct ClaudeProbe {
+    /// User scope first, then project scope.
+    files: [PathBuf; 2],
+    /// `PreToolUse` outcome per scope, in the same order as `files`.
+    hook: [TestOutcome; 2],
+    /// `SessionStart` outcome per scope, in the same order as `files`.
+    session_guard: [GuardTestOutcome; 2],
+}
+
+impl ClaudeProbe {
+    /// The stale-binary fault behind a `PreToolUse` entry that cannot run.
+    fn hook_fault(&self) -> Option<&str> {
+        self.hook.iter().find_map(|outcome| {
+            if let TestOutcome::Broken(reason) = outcome {
+                Some(reason.as_str())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// A `PATH`-relative entry still gates every tool call while `PATH`
+    /// resolves it, so it counts as installed and earns its own warning
+    /// rather than the critical "no enforcement at all" verdict.
+    fn hook_installed(&self) -> bool {
+        self.hook.iter().any(|outcome| {
+            matches!(
+                *outcome,
+                TestOutcome::Installed | TestOutcome::PathRelative(_)
+            )
+        })
+    }
+
+    /// One finding per scope whose `PreToolUse` entry still names the
+    /// binary by bare name.
+    fn hook_path_relative_findings(&self) -> Vec<DoctorFinding> {
+        self.hook
+            .iter()
+            .zip(&self.files)
+            .filter_map(|(outcome, file)| {
+                if let TestOutcome::PathRelative(command) = outcome {
+                    Some(path_relative_finding(
+                        "PreToolUse hook",
+                        command,
+                        file,
+                        "remargin claude pretool install",
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// # Errors
+    ///
+    /// I/O or JSON parse errors while reading either settings file.
+    fn probe(system: &dyn System, user_file: &Path, project_file: &Path) -> Result<Self> {
+        Ok(Self {
+            files: [user_file.to_path_buf(), project_file.to_path_buf()],
+            hook: [
+                pretool_install::test(system, user_file)?,
+                pretool_install::test(system, project_file)?,
+            ],
+            session_guard: [
+                session_guard_install::test(system, user_file)?,
+                session_guard_install::test(system, project_file)?,
+            ],
+        })
+    }
+
+    /// The stale-binary fault behind a `SessionStart` entry that cannot run.
+    fn session_guard_fault(&self) -> Option<&str> {
+        self.session_guard.iter().find_map(|outcome| {
+            if let GuardTestOutcome::Broken(reason) = outcome {
+                Some(reason.as_str())
+            } else {
+                None
+            }
+        })
+    }
+
+    fn session_guard_installed(&self) -> bool {
+        self.session_guard.iter().any(|outcome| {
+            matches!(
+                *outcome,
+                GuardTestOutcome::Installed | GuardTestOutcome::PathRelative(_)
+            )
+        })
+    }
+
+    /// One finding per scope whose `SessionStart` entry still names the
+    /// binary by bare name.
+    fn session_guard_path_relative_findings(&self) -> Vec<DoctorFinding> {
+        self.session_guard
+            .iter()
+            .zip(&self.files)
+            .filter_map(|(outcome, file)| {
+                if let GuardTestOutcome::PathRelative(command) = outcome {
+                    Some(path_relative_finding(
+                        "SessionStart guard",
+                        command,
+                        file,
+                        "remargin claude session-guard install",
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
@@ -463,20 +593,9 @@ pub fn run_doctor(
     // Same file `install --local` writes, so a local install is visible.
     let project_settings_file = cwd.join(".claude/settings.json");
 
-    let user_outcome = pretool_install::test(system, user_settings_file)?;
-    let project_outcome = pretool_install::test(system, &project_settings_file)?;
-
-    let hook_installed = matches!(
-        (&user_outcome, &project_outcome),
-        (TestOutcome::Installed, _) | (_, TestOutcome::Installed)
-    );
-
-    let user_guard = session_guard_install::test(system, user_settings_file)?;
-    let project_guard = session_guard_install::test(system, &project_settings_file)?;
-    let session_guard_installed = matches!(
-        (&user_guard, &project_guard),
-        (GuardTestOutcome::Installed, _) | (_, GuardTestOutcome::Installed)
-    );
+    let claude = ClaudeProbe::probe(system, user_settings_file, &project_settings_file)?;
+    let hook_installed = claude.hook_installed();
+    let session_guard_installed = claude.session_guard_installed();
 
     // Probed before the hook gate so the verdicts survive its short-circuit:
     // a report that dropped them there would say there is no goose
@@ -489,19 +608,11 @@ pub fn run_doctor(
     let mut findings: Vec<DoctorFinding> = Vec::new();
 
     if !hook_installed {
-        findings.push(DoctorFinding {
-            kind: FindingKind::HookMissing,
-            message: format!(
-                "The PreToolUse hook (`remargin claude pretool`) is not registered in either \
-                 the user-scope settings ({}) or the project-scope settings ({}). No \
-                 enforcement is active — agents can invoke the remargin CLI and bypass \
-                 path restrictions without restriction.",
-                user_settings_file.display(),
-                project_settings_file.display()
-            ),
-            remedy: String::from("Run `remargin claude pretool install` to register the hook."),
-            severity: Severity::Critical,
-        });
+        findings.push(hook_missing_finding(
+            user_settings_file,
+            &project_settings_file,
+            claude.hook_fault(),
+        ));
         // Short-circuit: no further checks are meaningful without the hook.
         return Ok(DoctorReport {
             findings,
@@ -515,23 +626,20 @@ pub fn run_doctor(
         });
     }
 
-    if checks.contains(&CheckName::SessionGuard) && !session_guard_installed {
-        findings.push(DoctorFinding {
-            kind: FindingKind::SessionGuardMissing,
-            message: format!(
-                "The SessionStart guard (`remargin claude session-guard`) is not registered in \
-                 either the user-scope settings ({}) or the project-scope settings ({}). The \
-                 PreToolUse hook fails open — if `remargin` falls off PATH it exits 127 \
-                 (non-blocking) and gated tool calls proceed unprotected with no signal. The \
-                 guard is the backstop that surfaces that failure into the session.",
-                user_settings_file.display(),
-                project_settings_file.display()
-            ),
-            remedy: String::from(
-                "Run `remargin claude session-guard install` to register the guard.",
-            ),
-            severity: Severity::Critical,
-        });
+    if checks.contains(&CheckName::Hook) {
+        findings.extend(claude.hook_path_relative_findings());
+    }
+
+    if checks.contains(&CheckName::SessionGuard) {
+        if session_guard_installed {
+            findings.extend(claude.session_guard_path_relative_findings());
+        } else {
+            findings.push(session_guard_missing_finding(
+                user_settings_file,
+                &project_settings_file,
+                claude.session_guard_fault(),
+            ));
+        }
     }
 
     findings.extend(goose_findings(goose.as_ref(), checks));
@@ -737,6 +845,122 @@ fn probe_goose(system: &dyn System, cwd: &Path) -> Result<Option<GooseProbe>> {
         session_guard,
         user_dir,
     }))
+}
+
+/// The leading gate finding. A `fault` is the stale-binary case — the entry
+/// is registered but its command names a binary that is gone — which fails
+/// open exactly as an absent entry does, so it shares the kind and names a
+/// different repair.
+fn hook_missing_finding(
+    user_settings_file: &Path,
+    project_settings_file: &Path,
+    fault: Option<&str>,
+) -> DoctorFinding {
+    let (message, remedy) = fault.map_or_else(
+        || {
+            (
+                format!(
+                    "The PreToolUse hook (`remargin claude pretool`) is not registered in either \
+                     the user-scope settings ({}) or the project-scope settings ({}). No \
+                     enforcement is active — agents can invoke the remargin CLI and bypass path \
+                     restrictions without restriction.",
+                    user_settings_file.display(),
+                    project_settings_file.display()
+                ),
+                String::from("Run `remargin claude pretool install` to register the hook."),
+            )
+        },
+        |reason| {
+            (
+                format!(
+                    "The PreToolUse hook (`remargin claude pretool`) is registered but cannot \
+                     run: {reason}. Claude Code treats a hook command it cannot spawn as a \
+                     non-blocking failure, so every gated tool call proceeds unprotected with no \
+                     signal — the same exposure as no hook at all."
+                ),
+                String::from(
+                    "Run `remargin claude pretool install` to rewrite the entry with the current \
+                     binary path.",
+                ),
+            )
+        },
+    );
+    DoctorFinding {
+        kind: FindingKind::HookMissing,
+        message,
+        remedy,
+        severity: Severity::Critical,
+    }
+}
+
+/// The `SessionStart` backstop's finding. As with the hook gate, a `fault`
+/// is the stale-binary case: the entry is registered but cannot spawn, so
+/// no backstop runs and the repair is a reinstall rather than a first
+/// install.
+fn session_guard_missing_finding(
+    user_settings_file: &Path,
+    project_settings_file: &Path,
+    fault: Option<&str>,
+) -> DoctorFinding {
+    let (message, remedy) = fault.map_or_else(
+        || {
+            (
+                format!(
+                    "The SessionStart guard (`remargin claude session-guard`) is not registered \
+                     in either the user-scope settings ({}) or the project-scope settings ({}). \
+                     The PreToolUse hook fails open — if `remargin` falls off PATH it exits 127 \
+                     (non-blocking) and gated tool calls proceed unprotected with no signal. The \
+                     guard is the backstop that surfaces that failure into the session.",
+                    user_settings_file.display(),
+                    project_settings_file.display()
+                ),
+                String::from("Run `remargin claude session-guard install` to register the guard."),
+            )
+        },
+        |reason| {
+            (
+                format!(
+                    "The SessionStart guard (`remargin claude session-guard`) is registered but \
+                     cannot run: {reason}. The backstop that exists to make a fail-open \
+                     enforcement path loud is itself silently absent from every session."
+                ),
+                String::from(
+                    "Run `remargin claude session-guard install` to rewrite the entry with the \
+                     current binary path.",
+                ),
+            )
+        },
+    );
+    DoctorFinding {
+        kind: FindingKind::SessionGuardMissing,
+        message,
+        remedy,
+        severity: Severity::Critical,
+    }
+}
+
+/// One entry still naming the binary by bare name. `subject` names which
+/// hook, since both Claude entries can carry the legacy form.
+fn path_relative_finding(
+    subject: &str,
+    command: &str,
+    settings_file: &Path,
+    install_command: &str,
+) -> DoctorFinding {
+    DoctorFinding {
+        kind: FindingKind::HookPathRelative,
+        message: format!(
+            "The {subject} entry in {} runs `{command}`, naming the remargin binary by bare name \
+             rather than absolute path — the form installs wrote before they embedded it. Claude \
+             Code resolves it through PATH at spawn time and treats a command it cannot find as \
+             non-blocking, so a PATH change disarms it silently.",
+            settings_file.display(),
+        ),
+        remedy: format!(
+            "Run `{install_command}` to rewrite the entry with the absolute binary path."
+        ),
+        severity: Severity::Warning,
+    }
 }
 
 fn goose_session_guard_missing_finding(

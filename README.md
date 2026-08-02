@@ -340,17 +340,19 @@ Two Claude Code hooks keep agents on the sanctioned surface. Both are idempotent
 
 ```bash
 remargin claude pretool install
-remargin claude pretool test
+remargin claude pretool test       # installed / not_installed / broken / path_relative, with the detail
 ```
 
-**SessionStart guard** — the enforcement hook *fails open*: if `remargin` is not on `PATH` the `PreToolUse` command exits 127, which Claude Code treats as non-blocking, so the tool call proceeds unprotected with no signal. The guard runs once at session start, re-checks that `remargin` resolves on `PATH` and that the realm's `.remargin.yaml` parses, and — because a `SessionStart` hook cannot block a session — surfaces any failure as a loud diagnostic injected into the session context (and a warning to the user) telling the agent enforcement may be silently disabled.
+Both entries name the remargin binary by **absolute path**, resolved from the running executable at install time, for the reason the goose installers do it: a command Claude Code cannot spawn exits 127, which it treats as non-blocking, so a `PATH` miss would be an unguarded tool call with no signal. An entry written by an older install still says the bare `remargin claude pretool`; it keeps working while `PATH` resolves it, and `test` and `doctor` report it as `path_relative` so you can reinstall. Reinstalling rewrites the entry in place — nothing else touches your settings, and a binary that moved is repaired the same way.
+
+**SessionStart guard** — the enforcement hook *fails open*: a `PreToolUse` command Claude Code cannot spawn (its binary moved, or a bare command name fell off `PATH`) exits 127, which Claude Code treats as non-blocking, so the tool call proceeds unprotected with no signal. The guard runs once at session start, re-checks that the installed `PreToolUse` command will actually spawn — the absolute binary it names is still on disk, or, for an older bare-name entry, `remargin` still resolves on `PATH` — and that the realm's `.remargin.yaml` parses, and — because a `SessionStart` hook cannot block a session — surfaces any failure as a loud diagnostic injected into the session context (and a warning to the user) telling the agent enforcement may be silently disabled.
 
 ```bash
 remargin claude session-guard install
 remargin claude session-guard test
 ```
 
-Run `remargin doctor` at any time to confirm both hooks are wired; it reports a critical finding for each missing hook, naming the install command to run.
+Run `remargin doctor` at any time to confirm both hooks are wired; it reports a critical finding for each hook that is missing *or* points at a binary that is gone, naming the install command to run, and a warning for each entry still naming the binary by bare name.
 
 ### goose
 

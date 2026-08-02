@@ -1,8 +1,12 @@
 use std::path::Path;
 
 use os_shim::mock::MockSystem;
+use serde_json::json;
 
 use super::{GuardDiagnostic, GuardDiagnosticInner, GuardOutcome, session_guard};
+use crate::permissions::pretool_install::{HOOK_MATCHER, HOOK_SUBCOMMAND};
+
+const EXE: &str = "/opt/bin/remargin";
 
 /// A mock whose `PATH` contains a directory holding a `remargin` file, so
 /// the on-PATH check passes and only the config check can fail.
@@ -13,6 +17,29 @@ fn mock_with_remargin_on_path() -> MockSystem {
         .with_file(Path::new("/usr/bin/remargin"), b"")
         .unwrap()
         .with_env("PATH", "/usr/bin")
+        .unwrap()
+}
+
+/// Project-scope settings declaring a `PreToolUse` entry that runs
+/// `command`, under a realm at `/r`.
+fn realm_with_hook_command(system: MockSystem, command: &str) -> MockSystem {
+    let settings = json!({
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": HOOK_MATCHER,
+                    "hooks": [ { "type": "command", "command": command } ]
+                }
+            ]
+        }
+    });
+    system
+        .with_dir(Path::new("/r"))
+        .unwrap()
+        .with_file(
+            Path::new("/r/.claude/settings.json"),
+            serde_json::to_string_pretty(&settings).unwrap().as_bytes(),
+        )
         .unwrap()
 }
 
@@ -118,4 +145,62 @@ fn missing_path_var_fails() {
         session_guard(&system, Path::new("/r")),
         GuardOutcome::Fail(_)
     ));
+}
+
+/// The installed entry names an absolute binary that is on disk, so the
+/// hook will spawn — `PATH` says nothing about it, and an empty `PATH` is
+/// no longer a failure.
+#[test]
+fn absolute_hook_command_is_ok_without_the_binary_on_path() {
+    let system = realm_with_hook_command(
+        MockSystem::new()
+            .with_file(Path::new(EXE), b"binary")
+            .unwrap()
+            .with_env("PATH", "/usr/bin")
+            .unwrap(),
+        &format!("{EXE} {HOOK_SUBCOMMAND}"),
+    );
+
+    assert_eq!(session_guard(&system, Path::new("/r")), GuardOutcome::Ok);
+}
+
+/// The installed entry names an absolute binary that is gone: the hook
+/// cannot spawn, so the guard fails and names the binary — even though
+/// another `remargin` does resolve on `PATH`.
+#[test]
+fn stale_absolute_hook_command_fails_and_names_the_binary() {
+    let system = realm_with_hook_command(
+        mock_with_remargin_on_path(),
+        &format!("/gone/remargin {HOOK_SUBCOMMAND}"),
+    );
+
+    let diag = expect_fail(session_guard(&system, Path::new("/r")));
+    let context = diag.hook_specific_output.additional_context;
+    assert!(
+        context.contains("/gone/remargin") && context.contains("does not exist"),
+        "diagnostic should name the vanished binary: {context}",
+    );
+}
+
+/// An entry an older install left behind resolves through `PATH`, so that
+/// is what the guard checks it against — present here, so the session is
+/// clean.
+#[test]
+fn path_relative_hook_command_falls_back_to_the_path_probe() {
+    let legacy = format!("remargin {HOOK_SUBCOMMAND}");
+    let clean = realm_with_hook_command(mock_with_remargin_on_path(), &legacy);
+    assert_eq!(session_guard(&clean, Path::new("/r")), GuardOutcome::Ok);
+
+    let broken = realm_with_hook_command(
+        MockSystem::new().with_env("PATH", "/usr/bin").unwrap(),
+        &legacy,
+    );
+    let diag = expect_fail(session_guard(&broken, Path::new("/r")));
+    assert!(
+        diag.hook_specific_output
+            .additional_context
+            .contains("PATH"),
+        "diagnostic should mention PATH: {}",
+        diag.hook_specific_output.additional_context,
+    );
 }

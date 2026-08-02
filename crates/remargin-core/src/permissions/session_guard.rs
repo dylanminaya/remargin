@@ -2,13 +2,13 @@
 //!
 //! Re-verifies that path enforcement will be live for the session:
 //!
-//! 1. the bare `remargin` binary resolves on `PATH` — the `PreToolUse`
-//!    hook command is `remargin claude pretool`, and a command that
-//!    cannot be found exits 127, which Claude Code treats as a
-//!    *non-blocking* failure. The gated tool call then proceeds
-//!    unprotected, silently. If the guard itself ran but bare `remargin`
-//!    no longer resolves, every future tool call in the session is
-//!    exposed;
+//! 1. the `PreToolUse` hook command that is actually installed can be
+//!    spawned — a command Claude Code cannot find exits 127, which it
+//!    treats as a *non-blocking* failure, and the gated tool call then
+//!    proceeds unprotected, silently. Installs embed an absolute binary
+//!    path, so the probe is that the binary is still on disk; for an entry
+//!    left by an older install, which names the binary by bare name, the
+//!    probe is that `remargin` still resolves on `PATH`;
 //! 2. the realm's `.remargin.yaml` above cwd parses — a malformed config
 //!    would surface at tool-call time instead of session start.
 //!
@@ -31,16 +31,29 @@
 mod tests;
 
 use std::env::split_paths;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use os_shim::System;
 use serde::Serialize;
 
 use crate::config;
+use crate::permissions::pretool_install::{self, TestOutcome};
 
-/// The bare command name a `PreToolUse` hook (`remargin claude pretool`)
-/// resolves through `PATH`. If this does not resolve, enforcement is off.
+/// The bare command name a `PATH`-relative `PreToolUse` entry resolves
+/// through `PATH`. If this does not resolve, enforcement is off.
 const BINARY_NAME: &str = "remargin";
+
+/// The settings file each scope's hook entry lives in, relative to its
+/// scope root — the same file both `install` and `install --local` write.
+const SETTINGS_FILE: &str = ".claude/settings.json";
+
+/// The failure the `PATH` probe reports. Shared by the entry that names the
+/// binary by bare name and by the no-entry fallback, since both come down
+/// to the same lookup.
+const PATH_FAILURE: &str = "the `remargin` binary does not resolve on PATH -- a PreToolUse hook \
+                            (`remargin claude pretool`) that cannot find `remargin` exits 127, \
+                            which Claude Code treats as non-blocking, so every gated tool call \
+                            proceeds unprotected";
 
 /// `SessionStart` diagnostic JSON shape Claude Code reads on stdout (exit 0).
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -82,12 +95,8 @@ pub enum GuardOutcome {
 pub fn session_guard(system: &dyn System, cwd: &Path) -> GuardOutcome {
     let mut failures: Vec<String> = Vec::new();
 
-    if !remargin_on_path(system) {
-        failures.push(String::from(
-            "the `remargin` binary does not resolve on PATH -- a PreToolUse hook \
-             (`remargin claude pretool`) that cannot find `remargin` exits 127, which Claude Code \
-             treats as non-blocking, so every gated tool call proceeds unprotected",
-        ));
+    if let Some(failure) = hook_failure(system, cwd) {
+        failures.push(failure);
     }
 
     if let Err(err) = config::load_config(system, cwd) {
@@ -105,9 +114,74 @@ pub fn session_guard(system: &dyn System, cwd: &Path) -> GuardOutcome {
     }
 }
 
+/// The reason the `PreToolUse` hook will not run, if it will not.
+///
+/// The hook counts as live when either settings scope declares an entry
+/// whose absolute binary is on disk — `install --local` is a supported
+/// wiring. An entry that names the binary by bare name is checked the only
+/// way a bare name can be: against `PATH`. A pair of scopes declaring no
+/// entry at all falls back to the same probe, since that is what a hook
+/// command would resolve through if one were there.
+fn hook_failure(system: &dyn System, cwd: &Path) -> Option<String> {
+    let outcomes: Vec<TestOutcome> = settings_files(system, cwd)
+        .iter()
+        // A probe that cannot answer is not evidence of a live hook, so an
+        // unreadable or unparseable settings file reads as broken and
+        // carries its own cause.
+        .map(|file| {
+            pretool_install::test(system, file).unwrap_or_else(|err| {
+                TestOutcome::Broken(format!(
+                    "{} could not be inspected ({err:#})",
+                    file.display()
+                ))
+            })
+        })
+        .collect();
+
+    if outcomes
+        .iter()
+        .any(|outcome| matches!(*outcome, TestOutcome::Installed))
+    {
+        return None;
+    }
+    if outcomes
+        .iter()
+        .any(|outcome| matches!(*outcome, TestOutcome::PathRelative(_)))
+    {
+        return path_failure(system);
+    }
+    for outcome in &outcomes {
+        if let TestOutcome::Broken(reason) = outcome {
+            return Some(format!(
+                "the PreToolUse hook cannot run: {reason} -- Claude Code treats a hook command it \
+                 cannot spawn as non-blocking, so every gated tool call proceeds unprotected"
+            ));
+        }
+    }
+    path_failure(system)
+}
+
+/// [`PATH_FAILURE`] when the bare binary does not resolve, else clean.
+fn path_failure(system: &dyn System) -> Option<String> {
+    (!remargin_on_path(system)).then(|| String::from(PATH_FAILURE))
+}
+
+/// Both settings files a hook entry can live in: user scope under `$HOME`,
+/// project scope under the session's working directory. A missing `HOME`
+/// drops only the user-scope file — the project one still answers.
+fn settings_files(system: &dyn System, cwd: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    if let Ok(home) = system.env_var("HOME") {
+        files.push(Path::new(&home).join(SETTINGS_FILE));
+    }
+    files.push(cwd.join(SETTINGS_FILE));
+    files
+}
+
 /// Resolve the bare [`BINARY_NAME`] against `PATH` through the [`System`]
 /// shim (never raw `std::env`), so the check reflects the same lookup a
-/// child `remargin claude pretool` invocation would perform. [`split_paths`]
+/// child `remargin claude pretool` invocation would perform when the entry
+/// names no absolute path. [`split_paths`]
 /// operates on the value we read — it does not touch process env — so it
 /// stays hermetic under `MockSystem`.
 fn remargin_on_path(system: &dyn System) -> bool {
