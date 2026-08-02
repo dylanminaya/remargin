@@ -18,9 +18,11 @@ generate-types:
 # Lint Rust (clippy + fmt check) and TypeScript (biome + tsc).
 lint: lint-rust lint-ts
 
+# `--workspace` because `default-members` excludes `crates/xtask`: without
+# it the type generator is neither linted nor tested by the gate.
 lint-rust:
-    cargo clippy --all-targets --features {{gate_features}} -- -D warnings
-    cargo fmt --check
+    cargo clippy --workspace --all-targets --features {{gate_features}} -- -D warnings
+    cargo fmt --all --check
 
 lint-ts:
     pnpm -C packages/remargin-obsidian lint
@@ -42,9 +44,16 @@ build-ts: generate-types
 build-cli-obsidian:
     cargo build -p remargin --features obsidian
 
-# Run the Rust test suite.
-test:
-    cargo test --features {{gate_features}}
+# Run the Rust and TypeScript test suites.
+test: test-rust test-ts
+
+test-rust:
+    cargo test --workspace --features {{gate_features}}
+
+# The TypeScript tests validate against `src/generated/`, which is
+# gitignored, so a fresh checkout must generate before testing.
+test-ts: generate-types
+    pnpm -C packages/remargin-obsidian test
 
 # Generate code coverage report (requires cargo-llvm-cov)
 test-coverage:
