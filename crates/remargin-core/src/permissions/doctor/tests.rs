@@ -347,6 +347,7 @@ fn clean_report() -> DoctorReport {
     DoctorReport {
         findings: vec![],
         goose_guard_installed: None,
+        goose_mcp_installed: None,
         goose_session_guard_installed: None,
         hook_installed: true,
         session_guard_installed: true,
@@ -364,6 +365,7 @@ fn findings_report() -> DoctorReport {
             severity: Severity::Critical,
         }],
         goose_guard_installed: None,
+        goose_mcp_installed: None,
         goose_session_guard_installed: None,
         hook_installed: false,
         session_guard_installed: false,
@@ -578,6 +580,7 @@ fn render_prompt_names_each_finding_rule_and_file() {
             leftover_finding_fixture("Edit(/r/**)", "/home/u/.claude/settings.json"),
         ],
         goose_guard_installed: None,
+        goose_mcp_installed: None,
         goose_session_guard_installed: None,
         hook_installed: true,
         session_guard_installed: true,
@@ -836,6 +839,7 @@ fn identity_findings_render_and_serialize() {
             },
         ],
         goose_guard_installed: None,
+        goose_mcp_installed: None,
         goose_session_guard_installed: None,
         hook_installed: true,
         session_guard_installed: true,
@@ -1002,6 +1006,7 @@ fn config_schema_lint_serializes_and_renders() {
             severity: Severity::Warning,
         }],
         goose_guard_installed: None,
+        goose_mcp_installed: None,
         goose_session_guard_installed: None,
         hook_installed: true,
         session_guard_installed: true,
@@ -1215,6 +1220,7 @@ fn stale_sandbox_serializes_and_renders() {
             severity: Severity::Warning,
         }],
         goose_guard_installed: None,
+        goose_mcp_installed: None,
         goose_session_guard_installed: None,
         hook_installed: true,
         session_guard_installed: true,
@@ -1351,6 +1357,7 @@ fn trusted_root_missing_serializes_and_renders() {
             severity: Severity::Warning,
         }],
         goose_guard_installed: None,
+        goose_mcp_installed: None,
         goose_session_guard_installed: None,
         hook_installed: true,
         session_guard_installed: true,
@@ -1516,7 +1523,7 @@ fn parse_set_trims_and_all_is_complete() {
     assert_eq!(parsed, expected);
     assert_eq!(
         CheckName::all().len(),
-        10,
+        11,
         "every check has exactly one slug",
     );
     assert!(CheckName::parse_set("").unwrap().is_empty());

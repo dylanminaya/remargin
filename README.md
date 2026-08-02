@@ -376,7 +376,21 @@ remargin goose session-guard uninstall  # removes only that entry; the PreToolUs
 
 goose gives `SessionStart` no blocking decision, so the backstop is **diagnostic-only**: a healthy stack is silent, and a broken one prints an unmissable diagnostic on stdout naming the specific breakage. It exits 0 either way — a non-zero exit is a hook failure goose swallows, and the diagnostic would go with it. It cannot stop a session; it makes a session that only *looks* guarded say so.
 
-`remargin doctor` reports the goose stack too: when goose is installed (`~/.agents` exists) but the guard plugin is missing or broken, it raises a critical finding naming the repair, and a second one when the plugin carries no live `SessionStart` backstop. Run just those checks with `remargin doctor --check=goose-guard` and `--check=goose-session-guard`.
+Blocking is only half a redirect. The guard's deny message names the remargin ops to use instead, and a goose session only has those ops once remargin is registered as a goose MCP extension — otherwise every block names tools that are not there. `remargin goose mcp` writes that entry:
+
+```sh
+remargin goose mcp install    # registers remargin's stdio server in goose's config.yaml
+remargin goose mcp test       # installed / not_installed / broken, with the specific fault
+remargin goose mcp uninstall  # removes only remargin's entry
+```
+
+Two properties of the generated entry are load-bearing and are asserted by tests. The entry sets **`name: remargin`** — goose builds every tool name as `<name>__<tool>` from that field and *not* from the entry's key, so a different name still loads the server while the guard's `remargin__` allow-prefix stops matching, and the guard would block its own redirect target. And the entry names the binary by **absolute path**, because goose warns and continues past an extension it cannot spawn: a `PATH` miss is a session that reaches the deny message carrying none of the tools it names.
+
+The command is careful with the file as a whole. goose keeps its provider, its model, and every other extension in that same `config.yaml`, and a config goose cannot parse costs the user every session rather than just remargin's tools — so install and uninstall touch exactly remargin's entry, refuse to overwrite a config that does not parse, and write through a temp file and a rename. Reinstalling an already-canonical entry leaves the file untouched. Registration takes effect for the next session started; goose reads its config at startup.
+
+`--local` is not a scope goose discovers. goose reads exactly one config file, `$XDG_CONFIG_HOME/goose/config.yaml` (`~/.config/goose/config.yaml` by default); a project-scoped file reaches a session only when `GOOSE_ADDITIONAL_CONFIG_FILES` names it, which every `--local` outcome message says.
+
+`remargin doctor` reports the goose stack too: when goose is installed (`~/.agents` exists) but the guard plugin is missing or broken, it raises a critical finding naming the repair, a second one when the plugin carries no live `SessionStart` backstop, and a third when the guard is wired but the MCP extension is not — the case where every block is a dead end. Run just those checks with `remargin doctor --check=goose-guard`, `--check=goose-session-guard`, and `--check=goose-mcp`.
 
 ### Permissions (optional)
 
@@ -920,6 +934,9 @@ Returns a projection of any mutating op (`ack`, `batch`, `comment`, `cp`, `delet
 | `goose session-guard install [--local]` | Add the `SessionStart` backstop entry to the goose guard plugin |
 | `goose session-guard uninstall [--local]` | Remove the `SessionStart` entry, preserving the `PreToolUse` one |
 | `goose session-guard test [--local]` | Report whether the `SessionStart` entry is wired |
+| `goose mcp install [--local]` | Register remargin's stdio server as a goose MCP extension, preserving the rest of the config |
+| `goose mcp uninstall [--local]` | Remove exactly remargin's extension entry |
+| `goose mcp test [--local]` | Report whether goose would load remargin's tools: installed, absent, or broken |
 | `doctor` | Check realm health: hooks wired (Claude and goose), config schema across the realm tree, identity/key resolvability, trusted-root existence, sandbox staging hygiene, project-scope settings. `--check=<set>` runs a named subset of checks |
 | `claude restrict` | Add permission rules (sync to `.claude/settings.local.json` and `~/.claude/settings.json`) |
 | `claude unrestrict` | Reverse a previous `restrict` cleanly |

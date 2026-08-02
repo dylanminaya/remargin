@@ -19,6 +19,7 @@ fn run_in(dir: &Path, args: &[&str]) -> Output {
         .unwrap()
         .current_dir(dir)
         .env("HOME", dir)
+        .env_remove("XDG_CONFIG_HOME")
         .args(args)
         .output()
         .unwrap()
@@ -159,8 +160,10 @@ fn clean_verbose_differs_from_plain() {
 
 // ---- goose stack --------------------------------------------------------
 
-/// The guard plugin `remargin goose pretool install` writes, with both hook
-/// entries and a command pointing at a binary that exists under `root`.
+/// The whole goose stack `remargin goose ... install` writes: both hook
+/// entries and the MCP extension the guard redirects to, all naming a
+/// binary that exists under `root`. The extension belongs here because the
+/// guard's redirect is only a redirect when the session has those tools.
 fn wire_goose_plugin(root: &Path) {
     let binary = root.join("bin/remargin");
     fs::create_dir_all(binary.parent().unwrap()).unwrap();
@@ -181,6 +184,18 @@ fn wire_goose_plugin(root: &Path) {
         }
     });
     fs::write(&hooks, serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+
+    let config = root.join(".config/goose/config.yaml");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    fs::write(
+        &config,
+        format!(
+            "extensions:\n  remargin:\n    enabled: true\n    type: stdio\n    name: \
+             remargin\n    cmd: {}\n    args:\n    - mcp\n",
+            binary.display(),
+        ),
+    )
+    .unwrap();
 }
 
 /// The realm has no goose installation, so the verbose section says nothing
@@ -195,7 +210,9 @@ fn clean_verbose_omits_goose_lines_without_goose() {
     assert_status(&out, 0);
     let stdout = stdout_of(&out);
     assert!(
-        !stdout.contains("goose-guard:") && !stdout.contains("goose-session-guard:"),
+        !stdout.contains("goose-guard:")
+            && !stdout.contains("goose-session-guard:")
+            && !stdout.contains("goose-mcp:"),
         "no goose installed, so no goose verdict line, got:\n{stdout}",
     );
 }
@@ -221,6 +238,10 @@ fn clean_json_omits_goose_verdict_keys_without_goose() {
         !fields.contains_key("goose_session_guard_installed"),
         "unset verdict must be absent, not null, got:\n{report:#}",
     );
+    assert!(
+        !fields.contains_key("goose_mcp_installed"),
+        "unset verdict must be absent, not null, got:\n{report:#}",
+    );
 }
 
 /// A wired goose stack under the pinned `$HOME` renders one verdict line
@@ -243,12 +264,17 @@ fn clean_verbose_reports_a_wired_goose_stack() {
         stdout.contains("goose-session-guard: ok"),
         "verbose output must show goose-session-guard: ok, got:\n{stdout}",
     );
+    assert!(
+        stdout.contains("goose-mcp: ok"),
+        "verbose output must show goose-mcp: ok, got:\n{stdout}",
+    );
 
     let json_out = run_doctor_with_settings(realm.path(), &settings, &["--json"]);
     assert_status(&json_out, 0);
     let report: serde_json::Value = serde_json::from_str(stdout_of(&json_out)).unwrap();
     assert_eq!(report["goose_guard_installed"], json!(true));
     assert_eq!(report["goose_session_guard_installed"], json!(true));
+    assert_eq!(report["goose_mcp_installed"], json!(true));
 }
 
 /// A goose installation with no guard plugin renders both verdicts as

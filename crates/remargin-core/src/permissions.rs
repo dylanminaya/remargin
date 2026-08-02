@@ -8,6 +8,7 @@
 pub mod claude_sync;
 pub mod doctor;
 pub mod goose_install;
+pub mod goose_mcp_install;
 pub mod goose_pretool;
 pub mod goose_session_guard;
 mod hook_settings;

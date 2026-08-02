@@ -1505,6 +1505,20 @@ pub enum SessionGuardAction {
 /// project-scope twin).
 #[derive(clap::Subcommand)]
 pub enum GooseAction {
+    /// goose MCP extension surface — the guard's redirect target.
+    ///
+    /// The guard blocks native tools on managed paths and names the
+    /// remargin ops to use instead; this registers remargin's stdio
+    /// server in goose's `config.yaml` so the session actually has them.
+    /// `install` / `uninstall` / `test` manage exactly remargin's entry,
+    /// leaving every sibling extension and goose's own provider settings
+    /// in place.
+    Mcp {
+        #[command(subcommand)]
+        action: GooseMcpAction,
+        #[command(flatten)]
+        output_args: OutputArgs,
+    },
     /// goose `PreToolUse` hook surface.
     ///
     /// With no subcommand (or `dispatch`), reads a goose `PreToolUse`
@@ -1531,6 +1545,33 @@ pub enum GooseAction {
         action: Option<GooseSessionGuardAction>,
         #[command(flatten)]
         output_args: OutputArgs,
+    },
+}
+
+/// `remargin goose mcp` subcommands.
+///
+/// `--local` is not a scope goose discovers. goose reads exactly one
+/// config file, `$XDG_CONFIG_HOME/goose/config.yaml`; a project file
+/// reaches a session only when `GOOSE_ADDITIONAL_CONFIG_FILES` names it,
+/// which every `--local` outcome message says.
+#[derive(clap::Subcommand)]
+pub enum GooseMcpAction {
+    /// Register remargin's stdio server in goose's `config.yaml`.
+    /// Preserves sibling extensions and goose's own settings.
+    Install {
+        #[arg(long)]
+        local: bool,
+    },
+    /// Report whether goose would load remargin's tools: `installed`,
+    /// `not_installed`, or `broken` with the specific fault.
+    Test {
+        #[arg(long)]
+        local: bool,
+    },
+    /// Remove exactly remargin's extension entry.
+    Uninstall {
+        #[arg(long)]
+        local: bool,
     },
 }
 

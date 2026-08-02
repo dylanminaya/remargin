@@ -57,6 +57,7 @@ fn run_lifecycle(home: &Path, cwd: &Path, args: &[&str]) -> Output {
         .unwrap()
         .current_dir(cwd)
         .env("HOME", home)
+        .env_remove("XDG_CONFIG_HOME")
         .args(args)
         .output()
         .unwrap()

@@ -25,7 +25,7 @@ use crate::params::{
     ReplaceParams, RestrictParams, SearchOutputMode, SearchParams, SignParams, WriteParams,
 };
 use crate::{
-    AssetsArgs, ClaudeAction, Cli, Commands, GooseAction, GoosePretoolAction,
+    AssetsArgs, ClaudeAction, Cli, Commands, GooseAction, GooseMcpAction, GoosePretoolAction,
     GooseSessionGuardAction, IdentityArgs, OutputArgs, PermissionsAction, PlanAction,
     PlanClaudeAction, PluginAction, PretoolAction, PromptAction, SessionGuardAction,
     UnrestrictedArgs,
@@ -137,7 +137,8 @@ const fn claude_action_output(action: &ClaudeAction) -> &OutputArgs {
 /// Pull the per-action [`OutputArgs`] from a [`GooseAction`] variant.
 const fn goose_action_output(action: &GooseAction) -> &OutputArgs {
     match action {
-        GooseAction::Pretool { output_args, .. }
+        GooseAction::Mcp { output_args, .. }
+        | GooseAction::Pretool { output_args, .. }
         | GooseAction::SessionGuard { output_args, .. } => output_args,
     }
 }
@@ -901,6 +902,10 @@ fn handle_goose(
     cwd: &Path,
 ) -> Result<()> {
     match action {
+        GooseAction::Mcp {
+            action: mcp_action,
+            output_args,
+        } => handle_goose_mcp_action(sinks, system, mcp_action, output_args.json),
         GooseAction::Pretool {
             action: pretool_action,
             output_args,
@@ -964,6 +969,29 @@ fn handle_goose_session_guard_dispatch(
         }
         GooseGuardOutcome::Ok => Ok(()),
         _ => Err(anyhow::anyhow!("unexpected goose session guard outcome")),
+    }
+}
+
+/// Route `remargin goose mcp <subcommand>`. Every variant manages
+/// remargin's entry in goose's `config.yaml` — the tools the guard's deny
+/// message redirects to. There is no `dispatch` here: the server itself is
+/// `remargin mcp`, which this registers rather than replaces.
+fn handle_goose_mcp_action(
+    sinks: &mut IoSinks<'_>,
+    system: &dyn System,
+    action: &GooseMcpAction,
+    json_mode: bool,
+) -> Result<()> {
+    match *action {
+        GooseMcpAction::Install { local } => {
+            handlers::cmd_goose_mcp_install(sinks, system, local, json_mode)
+        }
+        GooseMcpAction::Test { local } => {
+            handlers::cmd_goose_mcp_test(sinks, system, local, json_mode)
+        }
+        GooseMcpAction::Uninstall { local } => {
+            handlers::cmd_goose_mcp_uninstall(sinks, system, local, json_mode)
+        }
     }
 }
 

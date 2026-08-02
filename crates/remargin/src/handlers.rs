@@ -65,12 +65,12 @@ use remargin_core::operations::search;
 use remargin_core::operations::verify::RecipientStatus;
 use remargin_core::parser;
 use remargin_core::permissions::doctor as permissions_doctor;
-use remargin_core::permissions::goose_install;
 use remargin_core::permissions::inspect as permissions_inspect;
 use remargin_core::permissions::pretool_install;
 use remargin_core::permissions::restrict as permissions_restrict;
 use remargin_core::permissions::session_guard_install;
 use remargin_core::permissions::unprotect as permissions_unprotect;
+use remargin_core::permissions::{goose_install, goose_mcp_install};
 use remargin_core::responses;
 #[cfg(feature = "session")]
 use remargin_core::session::backend::resolve_backend;
@@ -92,6 +92,8 @@ use remargin_core::writer::InsertPosition;
 const GOOSE_PLUGIN_SUBJECT: &str = "goose guard plugin";
 
 const GOOSE_SESSION_SUBJECT: &str = "goose SessionStart guard";
+
+const GOOSE_MCP_SUBJECT: &str = "goose MCP extension";
 
 const fn author_type_str(at: &parser::AuthorType) -> &'static str {
     at.as_str()
@@ -364,6 +366,125 @@ pub fn cmd_goose_session_guard_uninstall(
         None,
         &path,
     )
+}
+
+/// Resolve the goose config file the MCP entry is written to. User scope
+/// is the only one goose discovers on its own; `--local` writes a project
+/// file that reaches a session only through `GOOSE_ADDITIONAL_CONFIG_FILES`.
+fn goose_mcp_config_file(system: &dyn System, cwd: &Path, local: bool) -> Result<PathBuf> {
+    if local {
+        Ok(goose_mcp_install::local_config_file(cwd))
+    } else {
+        let home = expand_cli_path(system, "~")?;
+        Ok(goose_mcp_install::user_config_file(system, &home))
+    }
+}
+
+pub fn cmd_goose_mcp_install(
+    sinks: &mut IoSinks<'_>,
+    system: &dyn System,
+    local: bool,
+    json_mode: bool,
+) -> Result<()> {
+    let cwd = env::current_dir().context("resolving current directory")?;
+    let path = goose_mcp_config_file(system, &cwd, local)?;
+    let outcome = goose_mcp_install::install(system, &path)?;
+    let status = match outcome {
+        goose_mcp_install::InstallOutcome::AlreadyInstalled => "already_installed",
+        goose_mcp_install::InstallOutcome::Installed => "installed",
+        _ => "unknown",
+    };
+    emit_goose_mcp_status(sinks, json_mode, local, status, None, &path)
+}
+
+pub fn cmd_goose_mcp_test(
+    sinks: &mut IoSinks<'_>,
+    system: &dyn System,
+    local: bool,
+    json_mode: bool,
+) -> Result<()> {
+    let cwd = env::current_dir().context("resolving current directory")?;
+    let path = goose_mcp_config_file(system, &cwd, local)?;
+    let outcome = goose_mcp_install::test(system, &path)?;
+    let (status, detail) = goose_mcp_test_status(outcome);
+    emit_goose_mcp_status(sinks, json_mode, local, status, detail.as_deref(), &path)
+}
+
+pub fn cmd_goose_mcp_uninstall(
+    sinks: &mut IoSinks<'_>,
+    system: &dyn System,
+    local: bool,
+    json_mode: bool,
+) -> Result<()> {
+    let cwd = env::current_dir().context("resolving current directory")?;
+    let path = goose_mcp_config_file(system, &cwd, local)?;
+    let outcome = goose_mcp_install::uninstall(system, &path)?;
+    let status = match outcome {
+        goose_mcp_install::UninstallOutcome::NotInstalled => "not_installed",
+        goose_mcp_install::UninstallOutcome::Uninstalled => "uninstalled",
+        _ => "unknown",
+    };
+    emit_goose_mcp_status(sinks, json_mode, local, status, None, &path)
+}
+
+fn goose_mcp_test_status(
+    outcome: goose_mcp_install::TestOutcome,
+) -> (&'static str, Option<String>) {
+    match outcome {
+        goose_mcp_install::TestOutcome::Broken(reason) => ("broken", Some(reason)),
+        goose_mcp_install::TestOutcome::Installed => ("installed", None),
+        goose_mcp_install::TestOutcome::NotInstalled => ("not_installed", None),
+        _ => ("unknown", None),
+    }
+}
+
+/// Status render for the goose MCP extension lifecycle.
+///
+/// A `--local` outcome always carries the `GOOSE_ADDITIONAL_CONFIG_FILES`
+/// requirement: goose discovers only the user-scope config, so a project
+/// file nothing points at is a successful write that changes no session —
+/// the exact silent dead end this command exists to remove.
+fn emit_goose_mcp_status(
+    sinks: &mut IoSinks<'_>,
+    json_mode: bool,
+    local: bool,
+    status: &str,
+    detail: Option<&str>,
+    path: &Path,
+) -> Result<()> {
+    let scope = scope_label(local);
+    if json_mode {
+        return print_output(
+            sinks,
+            true,
+            &json!({
+                "status": status,
+                "scope": scope,
+                "detail": detail,
+                "config_file": path.display().to_string(),
+                "requires_env": local.then_some(goose_mcp_install::ADDITIONAL_CONFIG_ENV),
+            }),
+        );
+    }
+    writeln!(
+        sinks.stderr,
+        "{GOOSE_MCP_SUBJECT} ({scope}): {status} at {}",
+        path.display(),
+    )
+    .context("writing to stderr")?;
+    if let Some(reason) = detail {
+        writeln!(sinks.stderr, "  {reason}").context("writing to stderr")?;
+    }
+    if local {
+        writeln!(
+            sinks.stderr,
+            "  goose reads no project config on its own — set {}={} for it to take effect.",
+            goose_mcp_install::ADDITIONAL_CONFIG_ENV,
+            path.display(),
+        )
+        .context("writing to stderr")?;
+    }
+    Ok(())
 }
 
 fn goose_test_status(outcome: goose_install::TestOutcome) -> (&'static str, Option<String>) {

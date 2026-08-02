@@ -13,7 +13,7 @@ mod render;
 #[cfg(feature = "session")]
 pub(crate) use cli::SessionAction;
 pub(crate) use cli::{
-    AssetsArgs, ClaudeAction, Cli, Commands, GooseAction, GoosePretoolAction,
+    AssetsArgs, ClaudeAction, Cli, Commands, GooseAction, GooseMcpAction, GoosePretoolAction,
     GooseSessionGuardAction, IdentityAction, IdentityArgs, McpAction, ObsidianAction, OutputArgs,
     PermissionsAction, PlanAction, PlanClaudeAction, PluginAction, PretoolAction, PromptAction,
     RegistryAction, SandboxAction, SessionGuardAction, UnrestrictedArgs,

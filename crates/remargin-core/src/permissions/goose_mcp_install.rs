@@ -1,0 +1,455 @@
+//! Lifecycle of remargin's registration as a goose MCP extension.
+//!
+//! The goose guard blocks native tools on managed paths and redirects the
+//! agent to remargin's MCP ops. That redirect is only a redirect when the
+//! session actually has those ops; registering them is what this module
+//! does. Without it the guard's deny message names tools the session never
+//! received — a dead end rather than a detour.
+//!
+//! Four properties of the generated entry are load-bearing:
+//!
+//! - **`name: remargin`.** goose namespaces an extension's tools as
+//!   `<name>__<tool>`, taken from this field and *not* from the entry's key
+//!   in the `extensions` mapping. Another name still loads the server, but
+//!   every tool then arrives as `<other>__get` and the guard's `remargin__`
+//!   allow-prefix stops matching — the guard would block its own redirect
+//!   target.
+//! - **An absolute `cmd`.** goose warns and continues when it cannot spawn
+//!   an extension, so a `PATH` miss at spawn time is a session that reaches
+//!   the deny message carrying none of the tools it names. The path is
+//!   resolved from the running executable at install time.
+//! - **Whole-file care.** goose reads its provider, its model, and every
+//!   other extension out of this same file. A `config.yaml` it cannot parse
+//!   costs the user their entire goose setup rather than just remargin —
+//!   goose refuses to start a session at all. So a config that does not
+//!   parse is an error here, never something to overwrite, and every write
+//!   lands through a temp file and a rename.
+//! - **Idempotence without churn.** An entry already matching the canonical
+//!   shape leaves the file untouched, so reinstalling never reformats a
+//!   hand-maintained config.
+//!
+//! Scope: goose discovers exactly one config file,
+//! `$XDG_CONFIG_HOME/goose/config.yaml` (`~/.config/goose/config.yaml` by
+//! default). There is no project-scoped config — a file beside a project is
+//! read only when [`ADDITIONAL_CONFIG_ENV`] names it — so `--local` writes
+//! a file the user must point that variable at, and the CLI says so rather
+//! than implying a scope goose would discover on its own.
+
+#[cfg(test)]
+mod tests;
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context as _, Result};
+use os_shim::System;
+use serde_yaml::{Mapping, Value};
+
+/// Env var naming extra config files for goose to read. goose discovers no
+/// project-scoped config on its own, so a `--local` install only reaches a
+/// session through this variable.
+pub const ADDITIONAL_CONFIG_ENV: &str = "GOOSE_ADDITIONAL_CONFIG_FILES";
+
+/// The argument that starts remargin's stdio MCP server.
+pub const EXTENSION_ARG: &str = "mcp";
+
+/// remargin's key in goose's `extensions` mapping. Identity for install and
+/// uninstall; it does *not* set the tool prefix, which is
+/// [`EXTENSION_NAME`]'s job.
+pub const EXTENSION_KEY: &str = "remargin";
+
+/// The entry's `name`. goose builds every tool name as `<name>__<tool>`, so
+/// this is the string the guard's `remargin__` allow-prefix matches on.
+pub const EXTENSION_NAME: &str = "remargin";
+
+/// Mapping under the config root that holds every extension entry.
+const EXTENSIONS_KEY: &str = "extensions";
+
+/// goose's directory under a config home.
+const CONFIG_DIR: &str = "goose";
+
+/// goose's config file inside [`CONFIG_DIR`].
+const CONFIG_FILE: &str = "config.yaml";
+
+/// Description shown to the agent alongside the extension's tools.
+const EXTENSION_DESCRIPTION: &str = "Read, write, and comment on remargin-managed markdown. Use \
+                                     these instead of shell/edit/write tools for any managed .md \
+                                     file.";
+
+/// Seconds goose allows the server before abandoning it.
+const EXTENSION_TIMEOUT_SECS: u64 = 300;
+
+/// Transport discriminant telling goose to spawn `cmd` and speak stdio.
+const EXTENSION_TYPE: &str = "stdio";
+
+/// Directory a `--local` install writes into, relative to the project root.
+const LOCAL_CONFIG_DIR: &str = ".goose";
+
+/// Suffix of the sibling file every write lands in before its rename.
+const TEMP_SUFFIX: &str = ".remargin-tmp";
+
+/// Config home used when `XDG_CONFIG_HOME` is unset, relative to `$HOME`.
+const XDG_CONFIG_FALLBACK: &str = ".config";
+
+/// The env var overriding the config home.
+const XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
+
+/// The config file as one probe found it.
+enum ConfigState {
+    /// No file there — goose has no extension registered from it.
+    Absent,
+    /// Present but not a YAML mapping, so it describes nothing and must
+    /// not be overwritten. Carries the reason.
+    Unusable(String),
+    Usable(Mapping),
+}
+
+/// What the config says about remargin's entry.
+enum EntryState {
+    /// The config parses but declares no remargin entry.
+    Absent,
+    /// Declared and shaped correctly, but the binary `cmd` names is gone.
+    CommandMissing(String),
+    /// The config file is not there at all.
+    ConfigAbsent,
+    /// The config cannot be read as a mapping. Carries the reason.
+    ConfigUnusable(String),
+    /// Declared, but shaped so goose loads no remargin tools from it.
+    /// Carries the specific fault.
+    Unusable(String),
+    /// Declared, well-shaped, and the binary it names exists.
+    Wired,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InstallOutcome {
+    AlreadyInstalled,
+    Installed,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TestOutcome {
+    /// The entry is there but goose would load no remargin tools from it.
+    /// Carries the specific fault so the caller can name it.
+    Broken(String),
+    Installed,
+    NotInstalled,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UninstallOutcome {
+    NotInstalled,
+    Uninstalled,
+}
+
+/// The config file a `--local` install writes, under the project root.
+/// goose reads it only when [`ADDITIONAL_CONFIG_ENV`] names it.
+#[must_use]
+pub fn local_config_file(root: &Path) -> PathBuf {
+    root.join(LOCAL_CONFIG_DIR).join(CONFIG_FILE)
+}
+
+/// Write remargin's extension entry, rewriting a drifted one in place.
+///
+/// Every other extension, and every unrelated key in the file, is carried
+/// through untouched: goose keeps its provider and model here too.
+///
+/// # Errors
+///
+/// Returns an error when the running executable cannot be resolved (the
+/// entry would otherwise name a non-absolute command), when the config
+/// exists but does not parse (overwriting it would cost the user their
+/// whole goose setup), or when the file cannot be written.
+pub fn install(system: &dyn System, path: &Path) -> Result<InstallOutcome> {
+    let command = extension_command(system)?;
+    let entry = canonical_entry(&command);
+    let mut config = match load_config(system, path) {
+        ConfigState::Absent => Mapping::new(),
+        ConfigState::Unusable(reason) => {
+            return Err(anyhow::anyhow!(
+                "{reason}; refusing to overwrite it because goose reads its provider and every \
+                 other extension from this file"
+            ));
+        }
+        ConfigState::Usable(mapping) => mapping,
+    };
+
+    // An entry already in canonical shape leaves the file alone entirely,
+    // so reinstalling never reformats a config the user hand-maintains.
+    if declared_entry(&config).is_some_and(|found| *found == entry) {
+        return Ok(InstallOutcome::AlreadyInstalled);
+    }
+
+    let mut extensions = child_mapping(&config, EXTENSIONS_KEY);
+    insert(&mut extensions, EXTENSION_KEY, entry);
+    insert(&mut config, EXTENSIONS_KEY, Value::Mapping(extensions));
+    write_config(system, path, &config)?;
+    Ok(InstallOutcome::Installed)
+}
+
+/// Report whether goose would load remargin's tools from this config.
+///
+/// # Errors
+///
+/// Returns an error when a path existence probe fails.
+pub fn test(system: &dyn System, path: &Path) -> Result<TestOutcome> {
+    Ok(match entry_state(system, path)? {
+        EntryState::Absent | EntryState::ConfigAbsent => TestOutcome::NotInstalled,
+        EntryState::CommandMissing(command) => TestOutcome::Broken(format!(
+            "the extension entry in {} runs {command}, which does not exist, so goose warns and \
+             starts the session without any remargin tools",
+            path.display()
+        )),
+        EntryState::ConfigUnusable(reason) | EntryState::Unusable(reason) => {
+            TestOutcome::Broken(reason)
+        }
+        EntryState::Wired => TestOutcome::Installed,
+    })
+}
+
+/// Remove remargin's entry, leaving every sibling extension and every
+/// unrelated key in the file alone.
+///
+/// # Errors
+///
+/// Returns an error when the config exists but does not parse (removing an
+/// entry from it would mean rewriting a file this module cannot read), or
+/// when the file cannot be written.
+pub fn uninstall(system: &dyn System, path: &Path) -> Result<UninstallOutcome> {
+    let mut config = match load_config(system, path) {
+        ConfigState::Absent => return Ok(UninstallOutcome::NotInstalled),
+        ConfigState::Unusable(reason) => {
+            return Err(anyhow::anyhow!(
+                "{reason}; refusing to rewrite it because goose reads its provider and every \
+                 other extension from this file"
+            ));
+        }
+        ConfigState::Usable(mapping) => mapping,
+    };
+    if declared_entry(&config).is_none() {
+        return Ok(UninstallOutcome::NotInstalled);
+    }
+
+    let mut extensions = child_mapping(&config, EXTENSIONS_KEY);
+    let _removed: Option<Value> = extensions.remove(Value::from(EXTENSION_KEY));
+    // The now-possibly-empty `extensions` mapping stays. Uninstall changes
+    // exactly remargin's entry; whether goose treats an absent mapping
+    // differently from an empty one is not this command's question to
+    // answer on the user's config.
+    insert(&mut config, EXTENSIONS_KEY, Value::Mapping(extensions));
+    write_config(system, path, &config)?;
+    Ok(UninstallOutcome::Uninstalled)
+}
+
+/// goose's config file for user scope: `$XDG_CONFIG_HOME/goose/config.yaml`,
+/// falling back to `~/.config/goose/config.yaml`. This is the only path
+/// goose discovers on its own.
+#[must_use]
+pub fn user_config_file(system: &dyn System, home: &Path) -> PathBuf {
+    let config_home = system
+        .env_var(XDG_CONFIG_HOME)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map_or_else(|| home.join(XDG_CONFIG_FALLBACK), PathBuf::from);
+    config_home.join(CONFIG_DIR).join(CONFIG_FILE)
+}
+
+/// The canonical entry for a remargin server started by `command`.
+fn canonical_entry(command: &str) -> Value {
+    let mut entry = Mapping::new();
+    insert(&mut entry, "enabled", Value::Bool(true));
+    insert(&mut entry, "type", Value::from(EXTENSION_TYPE));
+    insert(&mut entry, "name", Value::from(EXTENSION_NAME));
+    insert(
+        &mut entry,
+        "description",
+        Value::from(EXTENSION_DESCRIPTION),
+    );
+    insert(&mut entry, "cmd", Value::from(command));
+    insert(
+        &mut entry,
+        "args",
+        Value::Sequence(vec![Value::from(EXTENSION_ARG)]),
+    );
+    insert(&mut entry, "timeout", Value::from(EXTENSION_TIMEOUT_SECS));
+    insert(&mut entry, "env_keys", Value::Sequence(Vec::new()));
+    insert(&mut entry, "envs", Value::Mapping(Mapping::new()));
+    Value::Mapping(entry)
+}
+
+fn child_mapping(parent: &Mapping, key: &str) -> Mapping {
+    parent
+        .get(Value::from(key))
+        .and_then(Value::as_mapping)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// remargin's entry in `config`, if one is declared.
+fn declared_entry(config: &Mapping) -> Option<&Value> {
+    config
+        .get(Value::from(EXTENSIONS_KEY))?
+        .as_mapping()?
+        .get(Value::from(EXTENSION_KEY))
+}
+
+/// Why goose would load no remargin tools from `entry`, or `None` when its
+/// shape is sound. The binary's existence is a separate probe; this is
+/// shape alone.
+fn entry_fault(entry: &Value, path: &Path) -> Option<String> {
+    let file = path.display();
+    let Some(mapping) = entry.as_mapping() else {
+        return Some(format!("the extension entry in {file} is not a mapping"));
+    };
+    // Only an explicit `false` is a fault: goose's default for an absent
+    // key is not something this module claims to know.
+    if mapping.get(Value::from("enabled")) == Some(&Value::Bool(false)) {
+        return Some(format!(
+            "the extension entry in {file} is disabled (`enabled: false`), so goose starts the \
+             session with no remargin tools"
+        ));
+    }
+    match string_field(mapping, "type") {
+        Some(found) if found == EXTENSION_TYPE => {}
+        Some(found) => {
+            return Some(format!(
+                "the extension entry in {file} has type `{found}`, not `{EXTENSION_TYPE}`, so \
+                 goose never spawns the remargin server"
+            ));
+        }
+        None => {
+            return Some(format!(
+                "the extension entry in {file} declares no `type`, so goose cannot tell how to \
+                 start the remargin server"
+            ));
+        }
+    }
+    match string_field(mapping, "name") {
+        Some(found) if found == EXTENSION_NAME => {}
+        Some(found) => {
+            return Some(format!(
+                "the extension entry in {file} is named `{found}`, so its tools arrive as \
+                 `{found}__*` and the guard's `{EXTENSION_NAME}__` redirect target does not exist"
+            ));
+        }
+        None => {
+            return Some(format!(
+                "the extension entry in {file} declares no `name`, which is what goose prefixes \
+                 its tools with"
+            ));
+        }
+    }
+    if entry_command(mapping).is_none() {
+        return Some(format!(
+            "the extension entry in {file} declares no `cmd`, so goose drops it silently"
+        ));
+    }
+    if !declares_arg(mapping) {
+        return Some(format!(
+            "the extension entry in {file} does not pass `{EXTENSION_ARG}` in `args`, so the \
+             command it runs is not the remargin MCP server"
+        ));
+    }
+    None
+}
+
+/// The `cmd` of an entry, when it names one that is not blank.
+fn entry_command(mapping: &Mapping) -> Option<&str> {
+    string_field(mapping, "cmd").filter(|command| !command.trim().is_empty())
+}
+
+fn entry_state(system: &dyn System, path: &Path) -> Result<EntryState> {
+    let config = match load_config(system, path) {
+        ConfigState::Absent => return Ok(EntryState::ConfigAbsent),
+        ConfigState::Unusable(reason) => return Ok(EntryState::ConfigUnusable(reason)),
+        ConfigState::Usable(mapping) => mapping,
+    };
+    let Some(entry) = declared_entry(&config) else {
+        return Ok(EntryState::Absent);
+    };
+    if let Some(fault) = entry_fault(entry, path) {
+        return Ok(EntryState::Unusable(fault));
+    }
+    // `entry_fault` returning `None` established both of these.
+    let command = entry
+        .as_mapping()
+        .and_then(entry_command)
+        .unwrap_or_default();
+    if system.exists(Path::new(command))? {
+        Ok(EntryState::Wired)
+    } else {
+        Ok(EntryState::CommandMissing(String::from(command)))
+    }
+}
+
+/// `true` when `args` carries the MCP subcommand.
+fn declares_arg(mapping: &Mapping) -> bool {
+    mapping
+        .get(Value::from("args"))
+        .and_then(Value::as_sequence)
+        .is_some_and(|args| args.iter().any(|arg| arg.as_str() == Some(EXTENSION_ARG)))
+}
+
+/// The absolute command the entry runs. goose fails open on a spawn it
+/// cannot make, so the path is resolved here rather than left to `PATH`.
+fn extension_command(system: &dyn System) -> Result<String> {
+    let exe = system
+        .current_exe()
+        .context("resolving the remargin binary path for the goose extension entry")?;
+    Ok(exe.display().to_string())
+}
+
+fn insert(map: &mut Mapping, key: &str, value: Value) {
+    let _replaced: Option<Value> = map.insert(Value::from(key), value);
+}
+
+fn load_config(system: &dyn System, path: &Path) -> ConfigState {
+    let Ok(body) = system.read_to_string(path) else {
+        return ConfigState::Absent;
+    };
+    match serde_yaml::from_str::<Value>(&body) {
+        // goose writes an empty file before its first `configure`, and an
+        // empty YAML document is a null, not a mapping — an absence to
+        // fill rather than a fault.
+        Ok(Value::Null) => ConfigState::Usable(Mapping::new()),
+        Ok(Value::Mapping(mapping)) => ConfigState::Usable(mapping),
+        Ok(_) => ConfigState::Unusable(format!("{} is not a YAML mapping", path.display())),
+        Err(err) => ConfigState::Unusable(format!("{} is not valid YAML ({err})", path.display())),
+    }
+}
+
+/// A string field of an entry, when it is one.
+fn string_field<'entry>(mapping: &'entry Mapping, key: &str) -> Option<&'entry str> {
+    mapping.get(Value::from(key)).and_then(Value::as_str)
+}
+
+/// Render and replace `path` through a sibling temp file and a rename, so
+/// an interrupted write can never leave goose a half-file. goose reads its
+/// provider from here: a config it cannot parse costs the user every
+/// session, not just remargin's tools.
+fn write_config(system: &dyn System, path: &Path, config: &Mapping) -> Result<()> {
+    let body = serde_yaml::to_string(&Value::Mapping(config.clone()))
+        .context("serializing the goose config")?;
+    if let Some(parent) = path.parent() {
+        system
+            .create_dir_all(parent)
+            .with_context(|| format!("creating goose config directory {}", parent.display()))?;
+    }
+    let temp = temp_path(path);
+    system
+        .write(&temp, body.as_bytes())
+        .with_context(|| format!("writing goose config {}", temp.display()))?;
+    system
+        .rename(&temp, path)
+        .with_context(|| format!("replacing goose config {}", path.display()))
+}
+
+/// The sibling `path` is staged in — same directory, so the rename that
+/// follows stays on one filesystem and is atomic.
+fn temp_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(TEMP_SUFFIX);
+    path.with_file_name(name)
+}

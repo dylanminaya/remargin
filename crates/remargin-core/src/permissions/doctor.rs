@@ -30,6 +30,7 @@ use crate::operations::sandbox;
 use crate::parser::AuthorType;
 use crate::permissions::claude_sync::{self, RuleSet, canonicalize_rule, hook_covered_rules};
 use crate::permissions::goose_install::{self, TestOutcome as GooseTestOutcome};
+use crate::permissions::goose_mcp_install::{self, TestOutcome as GooseMcpTestOutcome};
 use crate::permissions::pretool_install::{self, TestOutcome};
 use crate::permissions::session_guard_install::{self, TestOutcome as GuardTestOutcome};
 
@@ -73,6 +74,13 @@ pub enum FindingKind {
     /// both the user-scope and project-scope plugin roots. goose sessions
     /// can shell and edit remargin-managed paths with no guard.
     GooseGuardMissing,
+    /// goose is installed and its guard is wired, but remargin is not
+    /// registered as a goose MCP extension in either config the CLI
+    /// writes. The guard blocks native tools on managed paths and
+    /// redirects the agent to remargin's ops — ops a session without the
+    /// extension never received, which turns every redirect into a dead
+    /// end rather than a detour.
+    GooseMcpMissing,
     /// goose is installed but the guard plugin declares no live
     /// `SessionStart` entry (`remargin goose session-guard`) in either
     /// scope. goose fails open on a hook it cannot run, so a `PreToolUse`
@@ -158,6 +166,12 @@ pub struct DoctorReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goose_guard_installed: Option<bool>,
 
+    /// Whether remargin is registered as a goose MCP extension in either
+    /// config the CLI writes, `None` under the same no-installation
+    /// condition as [`goose_guard_installed`](Self::goose_guard_installed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goose_mcp_installed: Option<bool>,
+
     /// Whether the goose `SessionStart` backstop is wired in either plugin
     /// scope, `None` under the same no-installation condition as
     /// [`goose_guard_installed`](Self::goose_guard_installed).
@@ -195,6 +209,11 @@ impl DoctorReport {
 struct GooseProbe {
     /// `PreToolUse` outcome per scope — user first, then project.
     guard: [GooseTestOutcome; 2],
+    /// MCP extension outcome per config file, in the same order as the
+    /// paths below.
+    mcp: [GooseMcpTestOutcome; 2],
+    mcp_local_file: PathBuf,
+    mcp_user_file: PathBuf,
     project_dir: PathBuf,
     /// `SessionStart` outcome per scope, in the same order as `guard`.
     session_guard: [GooseTestOutcome; 2],
@@ -230,6 +249,34 @@ impl GooseProbe {
 
     fn guard_installed(&self) -> bool {
         Self::any_installed(&self.guard)
+    }
+
+    /// Findings for the MCP extension. Silent until the guard is wired:
+    /// an unguarded session is `GooseGuardMissing`'s finding and its
+    /// repair comes first, and a session with neither guard nor extension
+    /// has no redirect to be a dead end yet.
+    fn mcp_findings(&self) -> Vec<DoctorFinding> {
+        if !self.guard_installed() || self.mcp_installed() {
+            return Vec::new();
+        }
+        let fault = self.mcp.iter().find_map(|outcome| {
+            if let GooseMcpTestOutcome::Broken(reason) = outcome {
+                Some(reason.as_str())
+            } else {
+                None
+            }
+        });
+        vec![goose_mcp_missing_finding(
+            &self.mcp_user_file,
+            &self.mcp_local_file,
+            fault,
+        )]
+    }
+
+    fn mcp_installed(&self) -> bool {
+        self.mcp
+            .iter()
+            .any(|outcome| matches!(*outcome, GooseMcpTestOutcome::Installed))
     }
 
     /// Findings for the `SessionStart` backstop. A `Broken` verdict
@@ -285,6 +332,9 @@ pub enum CheckName {
     ConfigSchemaLint,
     /// The goose guard plugin, when a goose installation is present.
     GooseGuard,
+    /// remargin's registration as a goose MCP extension — the guard's
+    /// redirect target — when a goose installation is present.
+    GooseMcp,
     /// The goose `SessionStart` backstop, when a goose installation is
     /// present.
     GooseSessionGuard,
@@ -308,9 +358,10 @@ impl CheckName {
     /// Every check, in a stable order. Single source of truth for
     /// [`all`](Self::all), [`from_slug`](Self::from_slug), and
     /// [`valid_slugs`](Self::valid_slugs).
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::ConfigSchemaLint,
         Self::GooseGuard,
+        Self::GooseMcp,
         Self::GooseSessionGuard,
         Self::Hook,
         Self::IdentityKey,
@@ -362,6 +413,7 @@ impl CheckName {
         match self {
             Self::ConfigSchemaLint => "config-schema-lint",
             Self::GooseGuard => "goose-guard",
+            Self::GooseMcp => "goose-mcp",
             Self::GooseSessionGuard => "goose-session-guard",
             Self::Hook => "hook",
             Self::IdentityKey => "identity-key",
@@ -431,6 +483,7 @@ pub fn run_doctor(
     // installation at all, which is the one thing `None` means.
     let goose = probe_goose(system, cwd)?;
     let goose_guard_installed = goose.as_ref().map(GooseProbe::guard_installed);
+    let goose_mcp_installed = goose.as_ref().map(GooseProbe::mcp_installed);
     let goose_session_guard_installed = goose.as_ref().map(GooseProbe::session_guard_installed);
 
     let mut findings: Vec<DoctorFinding> = Vec::new();
@@ -453,6 +506,7 @@ pub fn run_doctor(
         return Ok(DoctorReport {
             findings,
             goose_guard_installed,
+            goose_mcp_installed,
             goose_session_guard_installed,
             hook_installed,
             session_guard_installed,
@@ -480,14 +534,7 @@ pub fn run_doctor(
         });
     }
 
-    if let Some(probe) = &goose {
-        if checks.contains(&CheckName::GooseGuard) {
-            findings.extend(probe.guard_findings());
-        }
-        if checks.contains(&CheckName::GooseSessionGuard) {
-            findings.extend(probe.session_guard_findings());
-        }
-    }
+    findings.extend(goose_findings(goose.as_ref(), checks));
 
     // Lint containment before resolving: an out-of-realm entry makes
     // `resolve_permissions` (which the leftover check walks through)
@@ -536,6 +583,7 @@ pub fn run_doctor(
     Ok(DoctorReport {
         findings,
         goose_guard_installed,
+        goose_mcp_installed,
         goose_session_guard_installed,
         hook_installed,
         session_guard_installed,
@@ -674,8 +722,17 @@ fn probe_goose(system: &dyn System, cwd: &Path) -> Result<Option<GooseProbe>> {
         goose_install::test_session_guard(system, &user_dir)?,
         goose_install::test_session_guard(system, &project_dir)?,
     ];
+    let mcp_user_file = goose_mcp_install::user_config_file(system, &home);
+    let mcp_local_file = goose_mcp_install::local_config_file(cwd);
+    let mcp = [
+        goose_mcp_install::test(system, &mcp_user_file)?,
+        goose_mcp_install::test(system, &mcp_local_file)?,
+    ];
     Ok(Some(GooseProbe {
         guard,
+        mcp,
+        mcp_local_file,
+        mcp_user_file,
         project_dir,
         session_guard,
         user_dir,
@@ -708,6 +765,56 @@ fn goose_session_guard_missing_finding(
         ),
         remedy: String::from(
             "Run `remargin goose session-guard install` to register the SessionStart entry.",
+        ),
+        severity: Severity::Critical,
+    }
+}
+
+/// Every selected goose check's findings. A `None` probe is a machine with
+/// no goose installation, which has nothing to report — not a failure.
+fn goose_findings(goose: Option<&GooseProbe>, checks: &HashSet<CheckName>) -> Vec<DoctorFinding> {
+    let Some(probe) = goose else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    if checks.contains(&CheckName::GooseGuard) {
+        findings.extend(probe.guard_findings());
+    }
+    if checks.contains(&CheckName::GooseMcp) {
+        findings.extend(probe.mcp_findings());
+    }
+    if checks.contains(&CheckName::GooseSessionGuard) {
+        findings.extend(probe.session_guard_findings());
+    }
+    findings
+}
+
+fn goose_mcp_missing_finding(
+    user_file: &Path,
+    local_file: &Path,
+    fault: Option<&str>,
+) -> DoctorFinding {
+    let detail = fault.map_or_else(
+        || {
+            format!(
+                "no entry is registered in the user-scope config ({}) or the project one ({})",
+                user_file.display(),
+                local_file.display(),
+            )
+        },
+        |reason| format!("its entry is not live: {reason}"),
+    );
+    DoctorFinding {
+        kind: FindingKind::GooseMcpMissing,
+        message: format!(
+            "The goose guard is wired but remargin is not registered as a goose MCP extension — \
+             {detail}. The guard blocks native tools on managed paths and tells the agent to use \
+             the remargin ops instead, so without the extension every block names tools the \
+             session does not have: a dead end rather than a redirect.",
+        ),
+        remedy: String::from(
+            "Run `remargin goose mcp install` to register the extension, then start a new goose \
+             session.",
         ),
         severity: Severity::Critical,
     }
@@ -1043,6 +1150,9 @@ pub fn render_doctor_text(report: &DoctorReport, verbose: bool) -> String {
         );
         if let Some(installed) = report.goose_guard_installed {
             let _ = writeln!(out, "  goose-guard: {}", check_verdict(installed));
+        }
+        if let Some(installed) = report.goose_mcp_installed {
+            let _ = writeln!(out, "  goose-mcp: {}", check_verdict(installed));
         }
         if let Some(installed) = report.goose_session_guard_installed {
             let _ = writeln!(out, "  goose-session-guard: {}", check_verdict(installed));
