@@ -8,6 +8,7 @@ import {
   SandboxFailureEntry$Schema,
   SandboxListEntry$Schema,
   SearchMatch$Schema,
+  VerifyFailurePayload$Schema,
 } from "@/generated";
 import { parseVerifyFailure } from "@/lib/verifyFailure";
 import { parsePayloadArray } from "./envelopeParsing";
@@ -148,6 +149,12 @@ describe("envelopeParsing — real CLI output parses", () => {
     assert.equal(parsed.error_kind, "verify_failed");
     assert.equal(parsed.failures.length, 1);
     assert.equal(parsed.failures[0].id, "abc");
+  });
+
+  it("verify refusal: the payload schema takes the injected elapsed_ms directly", () => {
+    const parsed = VerifyFailurePayload$Schema.parse(JSON.parse(VERIFY_REFUSAL));
+    assert.equal(parsed.error_kind, "verify_failed");
+    assert.equal(parsed.elapsed_ms, 2);
   });
 });
 
