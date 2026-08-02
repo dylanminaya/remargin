@@ -1848,6 +1848,28 @@ fn goose_absent_leaves_both_verdicts_unset() {
     assert_eq!(report.goose_session_guard_installed, None, "{report:#?}");
 }
 
+/// An unset verdict is omitted from the wire, never nulled: the generated
+/// contract renders `Option` as the absent form, and a `null` fails it.
+/// Deserialize reads the omitted form back as the `None` it came from.
+#[test]
+fn goose_absent_omits_both_verdict_keys_from_the_wire() {
+    let report = run_goose_doctor(&goose_mock(&[]));
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(
+        !json.contains("goose_guard_installed"),
+        "unset verdict must be absent, not null: {json}",
+    );
+    assert!(
+        !json.contains("goose_session_guard_installed"),
+        "unset verdict must be absent, not null: {json}",
+    );
+
+    let parsed: DoctorReport = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.goose_guard_installed, None, "{parsed:#?}");
+    assert_eq!(parsed.goose_session_guard_installed, None, "{parsed:#?}");
+    assert_eq!(report, parsed);
+}
+
 /// goose installed with no guard plugin: both verdicts are a reported
 /// `false`, beside the findings that name the repair.
 #[test]

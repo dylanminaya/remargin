@@ -200,6 +200,29 @@ fn clean_verbose_omits_goose_lines_without_goose() {
     );
 }
 
+/// The same realm's `--json` leaves both verdict keys out entirely. The
+/// generated contract renders an unset verdict as the absent form, so a
+/// `null` here fails every consumer that validates against it.
+#[test]
+fn clean_json_omits_goose_verdict_keys_without_goose() {
+    let realm = TempDir::new().unwrap();
+    let settings = realm.path().join("settings.json");
+    fs::write(&settings, hook_settings_json()).unwrap();
+
+    let out = run_doctor_with_settings(realm.path(), &settings, &["--json"]);
+    assert_status(&out, 0);
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&out)).unwrap();
+    let fields = report.as_object().unwrap();
+    assert!(
+        !fields.contains_key("goose_guard_installed"),
+        "unset verdict must be absent, not null, got:\n{report:#}",
+    );
+    assert!(
+        !fields.contains_key("goose_session_guard_installed"),
+        "unset verdict must be absent, not null, got:\n{report:#}",
+    );
+}
+
 /// A wired goose stack under the pinned `$HOME` renders one verdict line
 /// per goose check, and `--json` carries the same verdicts.
 #[test]

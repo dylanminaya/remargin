@@ -153,11 +153,15 @@ pub struct DoctorReport {
     /// Whether the goose guard plugin is wired in either plugin scope.
     /// `None` when no goose installation was found — a machine that does
     /// not run goose has no verdict, which is not the same as a `false`.
+    /// The unset verdict is omitted from the wire rather than nulled: the
+    /// generated contract renders `Option` as the absent form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goose_guard_installed: Option<bool>,
 
     /// Whether the goose `SessionStart` backstop is wired in either plugin
     /// scope, `None` under the same no-installation condition as
     /// [`goose_guard_installed`](Self::goose_guard_installed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goose_session_guard_installed: Option<bool>,
 
     /// Whether the hook-installed check passed. When `false`, subsequent
