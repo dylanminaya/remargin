@@ -1502,8 +1502,167 @@ fn parse_set_trims_and_all_is_complete() {
     assert_eq!(parsed, expected);
     assert_eq!(
         CheckName::all().len(),
-        8,
+        9,
         "every check has exactly one slug",
     );
     assert!(CheckName::parse_set("").unwrap().is_empty());
+}
+
+// ---- goose guard --------------------------------------------------------
+
+/// A mock carrying both Claude hooks (so the gate does not short-circuit),
+/// a `HOME` env var, and whichever extra files the case needs.
+fn goose_mock(extra: &[(&str, &str)]) -> MockSystem {
+    let mut files = vec![("/home/u/.claude/settings.json", hook_settings_json())];
+    files.extend(extra.iter().map(|(p, b)| ((*p), (*b).to_owned())));
+    let borrowed: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, body)| (*path, body.as_str()))
+        .collect();
+    let system = mock_with_files(&borrowed);
+    system.set_env_var("HOME", "/home/u");
+    system
+}
+
+fn goose_hooks_json(command: &str) -> String {
+    let v = json!({
+        "hooks": { "PreToolUse": [{ "hooks": [
+            { "type": "command", "command": command },
+        ] }] },
+    });
+    serde_json::to_string_pretty(&v).unwrap()
+}
+
+fn run_goose_doctor(system: &dyn System) -> DoctorReport {
+    super::run_doctor(
+        system,
+        Path::new("/r"),
+        Path::new("/home/u/.claude/settings.json"),
+        &CheckName::all(),
+    )
+    .unwrap()
+}
+
+/// No goose installation (`~/.agents` absent) means no goose finding — the
+/// check is silent on machines that do not run goose.
+#[test]
+fn goose_absent_produces_no_finding() {
+    let report = run_goose_doctor(&goose_mock(&[]));
+    assert!(
+        !kinds(&report).iter().any(|k| matches!(
+            *k,
+            FindingKind::GooseGuardMissing | FindingKind::GooseGuardBroken
+        )),
+        "no goose installed, so no goose finding: {report:#?}",
+    );
+}
+
+/// goose present without the guard plugin: a critical `GooseGuardMissing`
+/// naming the install command.
+#[test]
+fn goose_present_without_guard_is_flagged() {
+    let system = goose_mock(&[("/home/u/.agents/plugins/other/plugin.json", "{}")]);
+    let report = run_goose_doctor(&system);
+    assert!(
+        kinds(&report).contains(&FindingKind::GooseGuardMissing),
+        "expected GooseGuardMissing: {report:#?}",
+    );
+    let finding = report
+        .findings
+        .iter()
+        .find(|f| f.kind == FindingKind::GooseGuardMissing)
+        .unwrap();
+    assert_eq!(finding.severity, Severity::Critical);
+    assert!(
+        finding.remedy.contains("remargin goose pretool install"),
+        "remedy should name the install command: {finding:#?}",
+    );
+}
+
+/// A guard plugin whose hook manifest is unparseable is a different repair
+/// than an absent one, and is reported as `GooseGuardBroken`.
+#[test]
+fn goose_present_with_broken_guard_is_flagged_as_broken() {
+    let system = goose_mock(&[(
+        "/home/u/.agents/plugins/remargin-guard/hooks/hooks.json",
+        "{ not json",
+    )]);
+    let report = run_goose_doctor(&system);
+    assert!(
+        kinds(&report).contains(&FindingKind::GooseGuardBroken),
+        "expected GooseGuardBroken: {report:#?}",
+    );
+}
+
+/// A wired guard plugin clears the check.
+#[test]
+fn goose_present_with_wired_guard_is_clean() {
+    let system = goose_mock(&[
+        ("/opt/bin/remargin", "binary"),
+        (
+            "/home/u/.agents/plugins/remargin-guard/hooks/hooks.json",
+            &goose_hooks_json("/opt/bin/remargin goose pretool"),
+        ),
+    ]);
+    let report = run_goose_doctor(&system);
+    assert!(
+        !kinds(&report).iter().any(|k| matches!(
+            *k,
+            FindingKind::GooseGuardMissing | FindingKind::GooseGuardBroken
+        )),
+        "wired guard should be clean: {report:#?}",
+    );
+}
+
+/// A project-scope guard satisfies the check even when the user scope has
+/// none — `install --local` is a supported wiring.
+#[test]
+fn goose_project_scope_guard_satisfies_the_check() {
+    let system = goose_mock(&[
+        ("/opt/bin/remargin", "binary"),
+        ("/home/u/.agents/marker", "x"),
+        (
+            "/r/.agents/plugins/remargin-guard/hooks/hooks.json",
+            &goose_hooks_json("/opt/bin/remargin goose pretool"),
+        ),
+    ]);
+    let report = run_goose_doctor(&system);
+    assert!(
+        !kinds(&report).iter().any(|k| matches!(
+            *k,
+            FindingKind::GooseGuardMissing | FindingKind::GooseGuardBroken
+        )),
+        "project-scope guard should be clean: {report:#?}",
+    );
+}
+
+/// The check is selectable by slug, and deselecting it suppresses the
+/// finding.
+#[test]
+fn goose_guard_check_is_selectable_by_slug() {
+    let system = goose_mock(&[("/home/u/.agents/marker", "x")]);
+
+    let selected = CheckName::parse_set("goose-guard").unwrap();
+    assert!(selected.contains(&CheckName::GooseGuard));
+    let report = super::run_doctor(
+        &system,
+        Path::new("/r"),
+        Path::new("/home/u/.claude/settings.json"),
+        &selected,
+    )
+    .unwrap();
+    assert_eq!(kinds(&report), vec![FindingKind::GooseGuardMissing]);
+
+    let other = CheckName::parse_set("session-guard").unwrap();
+    let deselected = super::run_doctor(
+        &system,
+        Path::new("/r"),
+        Path::new("/home/u/.claude/settings.json"),
+        &other,
+    )
+    .unwrap();
+    assert!(
+        !kinds(&deselected).contains(&FindingKind::GooseGuardMissing),
+        "deselected check must not report: {deselected:#?}",
+    );
 }

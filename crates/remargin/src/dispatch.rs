@@ -25,15 +25,16 @@ use crate::params::{
     ReplaceParams, RestrictParams, SearchOutputMode, SearchParams, SignParams, WriteParams,
 };
 use crate::{
-    AssetsArgs, ClaudeAction, Cli, Commands, IdentityArgs, OutputArgs, PermissionsAction,
-    PlanAction, PlanClaudeAction, PluginAction, PretoolAction, PromptAction, SessionGuardAction,
-    UnrestrictedArgs,
+    AssetsArgs, ClaudeAction, Cli, Commands, GooseAction, GoosePretoolAction, IdentityArgs,
+    OutputArgs, PermissionsAction, PlanAction, PlanClaudeAction, PluginAction, PretoolAction,
+    PromptAction, SessionGuardAction, UnrestrictedArgs,
 };
 use remargin_core::config::identity::IdentityFlags;
 use remargin_core::config::{self, ResolvedConfig};
 use remargin_core::document;
 use remargin_core::operations;
 use remargin_core::operations::replace;
+use remargin_core::permissions::goose_pretool::{BlockDecision, GooseVerdict, goose_pretool};
 use remargin_core::permissions::pretool::{PretoolOutcome, pretool};
 use remargin_core::permissions::session_guard::{GuardOutcome, session_guard};
 
@@ -101,6 +102,7 @@ pub const fn subcommand_output(cmd: &Commands) -> Option<&OutputArgs> {
         #[cfg(feature = "obsidian")]
         Commands::Obsidian { output_args, .. } => Some(output_args),
         Commands::Claude { action } => Some(claude_action_output(action)),
+        Commands::Goose { action } => Some(goose_action_output(action)),
         Commands::Permissions { action } => Some(permissions_action_output(action)),
         Commands::Plan { action, .. } => Some(plan_action_output(action)),
         #[cfg(feature = "session")]
@@ -125,6 +127,13 @@ const fn claude_action_output(action: &ClaudeAction) -> &OutputArgs {
         | ClaudeAction::SessionGuard { output_args, .. }
         | ClaudeAction::Restrict { output_args, .. }
         | ClaudeAction::Unrestrict { output_args, .. } => output_args,
+    }
+}
+
+/// Pull the per-action [`OutputArgs`] from a [`GooseAction`] variant.
+const fn goose_action_output(action: &GooseAction) -> &OutputArgs {
+    match action {
+        GooseAction::Pretool { output_args, .. } => output_args,
     }
 }
 
@@ -277,6 +286,7 @@ const fn subcommand_is_config_free(cmd: &Commands) -> bool {
         | Commands::Activity { .. }
         | Commands::Claude { .. }
         | Commands::Doctor { .. }
+        | Commands::Goose { .. }
         | Commands::Identity { .. }
         | Commands::Permissions { .. }
         | Commands::ResolveMode { .. }
@@ -348,6 +358,7 @@ const fn subcommand_identity(cmd: &Commands) -> Option<&IdentityArgs> {
         | Commands::Comments { .. }
         | Commands::Doctor { .. }
         | Commands::Get { .. }
+        | Commands::Goose { .. }
         | Commands::Keygen { .. }
         | Commands::Lint { .. }
         | Commands::Ls { .. }
@@ -380,6 +391,7 @@ const fn subcommand_assets(cmd: &Commands) -> Option<&AssetsArgs> {
         | Commands::Delete { .. }
         | Commands::Doctor { .. }
         | Commands::Get { .. }
+        | Commands::Goose { .. }
         | Commands::Identity { .. }
         | Commands::Keygen { .. }
         | Commands::Lint { .. }
@@ -448,6 +460,7 @@ const fn subcommand_unrestricted(cmd: &Commands) -> Option<&UnrestrictedArgs> {
         | Commands::Delete { .. }
         | Commands::Doctor { .. }
         | Commands::Edit { .. }
+        | Commands::Goose { .. }
         | Commands::Identity { .. }
         | Commands::Keygen { .. }
         | Commands::Lint { .. }
@@ -586,6 +599,7 @@ fn try_dispatch_config_free(
             handlers::cmd_permissions(sinks, system, cwd, action).map(Some)
         }
         Commands::Claude { action } => handle_claude(action, sinks, system, cwd).map(Some),
+        Commands::Goose { action } => handle_goose(action, sinks, system).map(Some),
         #[cfg(feature = "session")]
         Commands::Session { action } => handlers::cmd_session(sinks, system, cwd, action).map(Some),
         _ => {
@@ -875,6 +889,64 @@ fn handle_claude_pretool_dispatch(sinks: &mut IoSinks<'_>, system: &dyn System) 
     }
 }
 
+fn handle_goose(action: &GooseAction, sinks: &mut IoSinks<'_>, system: &dyn System) -> Result<()> {
+    match action {
+        GooseAction::Pretool {
+            action: pretool_action,
+            output_args,
+        } => handle_goose_pretool_action(sinks, system, pretool_action.as_ref(), output_args.json),
+    }
+}
+
+/// Route `remargin goose pretool [subcommand]`. With no subcommand (or
+/// `dispatch`), runs the stdin/stdout hook dispatcher. The install /
+/// uninstall / test variants manage the guard plugin directory.
+fn handle_goose_pretool_action(
+    sinks: &mut IoSinks<'_>,
+    system: &dyn System,
+    action: Option<&GoosePretoolAction>,
+    json_mode: bool,
+) -> Result<()> {
+    match action {
+        None | Some(GoosePretoolAction::Dispatch) => handle_goose_pretool_dispatch(sinks, system),
+        Some(GoosePretoolAction::Install { local }) => {
+            handlers::cmd_goose_pretool_install(sinks, system, *local, json_mode)
+        }
+        Some(GoosePretoolAction::Uninstall { local }) => {
+            handlers::cmd_goose_pretool_uninstall(sinks, system, *local, json_mode)
+        }
+        Some(GoosePretoolAction::Test { local }) => {
+            handlers::cmd_goose_pretool_test(sinks, system, *local, json_mode)
+        }
+    }
+}
+
+/// Reads the goose `PreToolUse` event JSON from stdin, runs the core
+/// [`remargin_core::permissions::goose_pretool::goose_pretool`] adapter,
+/// and renders the verdict.
+///
+/// A block fires on BOTH channels goose accepts — the decision object on
+/// stdout and the reason on stderr with exit 2 — because either alone is
+/// one platform quirk away from being ignored, and an ignored block is a
+/// silent pass. The exit code comes from the shared pretool sentinel,
+/// which the error mapper already routes to 2.
+fn handle_goose_pretool_dispatch(sinks: &mut IoSinks<'_>, system: &dyn System) -> Result<()> {
+    let mut buf = Vec::new();
+    stdin_handle()
+        .read_to_end(&mut buf)
+        .context("reading stdin for goose pretool")?;
+    let reason = match goose_pretool(system, &buf) {
+        GooseVerdict::Allow => return Ok(()),
+        GooseVerdict::Block { reason } => reason,
+        // A verdict this build does not know is not an allow.
+        _ => String::from("remargin returned a verdict this build cannot render; blocked."),
+    };
+    let json = serde_json::to_string(&BlockDecision::new(&reason))
+        .context("serializing goose decision")?;
+    writeln!(sinks.stdout, "{json}").context("writing goose pretool decision")?;
+    Err(anyhow::anyhow!("{PRETOOL_FAIL_SENTINEL}{reason}"))
+}
+
 /// Route `remargin claude session-guard [subcommand]`. With no subcommand
 /// (or `dispatch`), runs the `SessionStart` guard. The install /
 /// uninstall / test variants manage the hook entry in a Claude settings
@@ -961,6 +1033,7 @@ fn dispatch_with_config(
         | Commands::Activity { .. }
         | Commands::Claude { .. }
         | Commands::Doctor { .. }
+        | Commands::Goose { .. }
         | Commands::Identity { .. }
         | Commands::Mcp { .. }
         | Commands::Keygen { .. }

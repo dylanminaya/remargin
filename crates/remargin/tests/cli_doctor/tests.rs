@@ -17,12 +17,17 @@ fn run_args(args: &[&str], cwd: &Path, home: &Path) -> Output {
         .unwrap()
 }
 
-fn run_doctor(cwd: &Path, user_settings: &Path, extra: &[&str]) -> Output {
+/// `doctor` reads `$HOME` for the checks that are anchored there (the
+/// goose plugin root), so every run pins it at the test's temp home
+/// alongside `--user-settings`. Without that, the developer's real home
+/// decides what the report contains.
+fn run_doctor(cwd: &Path, home: &Path, user_settings: &Path, extra: &[&str]) -> Output {
     let mut args = vec!["doctor", "--user-settings", user_settings.to_str().unwrap()];
     args.extend_from_slice(extra);
     Command::cargo_bin("remargin")
         .unwrap()
         .current_dir(cwd)
+        .env("HOME", home)
         .args(&args)
         .output()
         .unwrap()
@@ -65,7 +70,7 @@ fn doctor_clean_when_both_hooks_installed() {
     assert!(guard.status.success());
 
     let user_settings = home.path().join(".claude/settings.json");
-    let out = run_doctor(realm.path(), &user_settings, &["--json"]);
+    let out = run_doctor(realm.path(), home.path(), &user_settings, &["--json"]);
     assert_status(&out, 0);
     let report: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(report["session_guard_installed"], Value::Bool(true));
@@ -87,7 +92,7 @@ fn doctor_flags_missing_guard_when_only_pretool_installed() {
     assert!(pretool.status.success());
 
     let user_settings = home.path().join(".claude/settings.json");
-    let out = run_doctor(realm.path(), &user_settings, &["--json"]);
+    let out = run_doctor(realm.path(), home.path(), &user_settings, &["--json"]);
     assert_status(&out, 1);
     let report: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(report["session_guard_installed"], Value::Bool(false));
@@ -135,7 +140,7 @@ fn doctor_detects_stale_remargin_cli_deny_and_prompt_mode_repairs_it() {
     let user_settings = home.path().join(".claude/settings.json");
 
     // --json: the stale rule is detected as a leftover.
-    let out = run_doctor(realm.path(), &user_settings, &["--json"]);
+    let out = run_doctor(realm.path(), home.path(), &user_settings, &["--json"]);
     assert_status(&out, 1);
     let report: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(
@@ -160,7 +165,12 @@ fn doctor_detects_stale_remargin_cli_deny_and_prompt_mode_repairs_it() {
     );
 
     // --prompt-mode: emits a removal instruction for the same rule.
-    let prompt_out = run_doctor(realm.path(), &user_settings, &["--prompt-mode"]);
+    let prompt_out = run_doctor(
+        realm.path(),
+        home.path(),
+        &user_settings,
+        &["--prompt-mode"],
+    );
     let prompt = str::from_utf8(&prompt_out.stdout).unwrap();
     assert!(
         prompt.contains("Remove the deny rule `Bash(remargin *)`"),
@@ -181,7 +191,7 @@ fn doctor_text_output_names_the_guard_remedy() {
     run_args(&["claude", "pretool", "install"], realm.path(), home.path());
 
     let user_settings = home.path().join(".claude/settings.json");
-    let out = run_doctor(realm.path(), &user_settings, &[]);
+    let out = run_doctor(realm.path(), home.path(), &user_settings, &[]);
     assert_status(&out, 1);
     let stdout = str::from_utf8(&out.stdout).unwrap();
     assert!(stdout.contains("[CRITICAL]"), "expected critical: {stdout}");

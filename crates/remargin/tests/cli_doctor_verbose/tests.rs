@@ -18,6 +18,7 @@ fn run_in(dir: &Path, args: &[&str]) -> Output {
     Command::cargo_bin("remargin")
         .unwrap()
         .current_dir(dir)
+        .env("HOME", dir)
         .args(args)
         .output()
         .unwrap()
@@ -70,7 +71,9 @@ fn hook_settings_json() -> String {
 }
 
 /// Helper: run doctor with an explicit --user-settings pointing at a
-/// temporary file, so the test never touches the real user home.
+/// temporary file and `$HOME` pinned at the realm, so the test never
+/// touches the real user home — neither for the settings file nor for the
+/// home-anchored checks (the goose plugin root).
 fn run_doctor_with_settings(realm: &Path, user_settings: &Path, extra_args: &[&str]) -> Output {
     let mut args = vec!["doctor", "--user-settings", user_settings.to_str().unwrap()];
     args.extend_from_slice(extra_args);

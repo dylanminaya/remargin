@@ -111,7 +111,14 @@ struct AncestorMatch {
 }
 
 /// Per-tool extracted shape that drives the decision.
-enum ToolTarget {
+///
+/// Public because it is the seam every host adapter maps its own hook
+/// envelope onto: Claude Code's arrives through [`pretool`], goose's
+/// through [`crate::permissions::goose_pretool`]. Mapping an envelope to a
+/// `ToolTarget` and calling [`decide`] is the only sanctioned way to add a
+/// host — a second decision path would let the two drift.
+#[non_exhaustive]
+pub enum ToolTarget {
     /// `Bash` command — every path-shaped word is resolved against the
     /// realm governing it and denied if it lands inside one.
     BashCommand { command: String },
@@ -136,12 +143,19 @@ pub fn pretool(system: &dyn System, stdin_bytes: &[u8]) -> PretoolOutcome {
         Err(reason) => return PretoolOutcome::Fail(reason),
     };
 
+    decide(system, &target, &event.cwd)
+}
+
+/// Resolve `target` against the realm that governs it, from a session
+/// rooted at `cwd`. The single decision path shared by every host adapter.
+#[must_use]
+pub fn decide(system: &dyn System, target: &ToolTarget, cwd: &Path) -> PretoolOutcome {
     match target {
         ToolTarget::NoCheck => PretoolOutcome::SilentAllow,
         ToolTarget::Path { tool_name, path } => {
-            // event.cwd's only job is rooting a relative target; the
-            // governing realm is resolved from the target itself.
-            let absolute = absolutise(&event.cwd, &path);
+            // cwd's only job is rooting a relative target; the governing
+            // realm is resolved from the target itself.
+            let absolute = absolutise(cwd, path);
             let canonical = canonicalize_existing_prefix(system, &absolute);
             let resolved = match resolve_for_target(system, &canonical) {
                 Ok(value) => value,
@@ -150,16 +164,16 @@ pub fn pretool(system: &dyn System, stdin_bytes: &[u8]) -> PretoolOutcome {
                 }
             };
             if path_is_restricted(&resolved, &canonical) {
-                return PretoolOutcome::Deny(build_decision(&tool_name, &canonical));
+                return PretoolOutcome::Deny(build_decision(tool_name, &canonical));
             }
             // Grep / Glob search a subtree recursively, so a search root at or
             // above a trusted root sweeps the protected subtree even though the
             // root itself is not at/below a trusted root. Read / Write / Edit
             // touch only the named path, never its subtree, so they are exempt.
-            if is_search_tool(&tool_name) {
+            if is_search_tool(tool_name) {
                 match matching_trusted_root_ancestor(system, &canonical) {
                     Ok(Some(_)) => {
-                        return PretoolOutcome::Deny(build_decision(&tool_name, &canonical));
+                        return PretoolOutcome::Deny(build_decision(tool_name, &canonical));
                     }
                     Ok(None) => {}
                     Err(err) => {
@@ -172,13 +186,13 @@ pub fn pretool(system: &dyn System, stdin_bytes: &[u8]) -> PretoolOutcome {
         ToolTarget::BashCommand { command } => {
             // cli_allowed is a folder policy keyed off the session cwd;
             // path restriction is resolved per-word from the target.
-            let policy = match resolve_permissions(system, &event.cwd) {
+            let policy = match resolve_permissions(system, cwd) {
                 Ok(value) => value,
                 Err(err) => {
                     return PretoolOutcome::Fail(format!("permissions resolve failed: {err}"));
                 }
             };
-            bash_decision(system, policy.cli_allowed(), &command, &event.cwd)
+            bash_decision(system, policy.cli_allowed(), command, cwd)
         }
     }
 }

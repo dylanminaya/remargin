@@ -65,6 +65,7 @@ use remargin_core::operations::search;
 use remargin_core::operations::verify::RecipientStatus;
 use remargin_core::parser;
 use remargin_core::permissions::doctor as permissions_doctor;
+use remargin_core::permissions::goose_install;
 use remargin_core::permissions::inspect as permissions_inspect;
 use remargin_core::permissions::pretool_install;
 use remargin_core::permissions::restrict as permissions_restrict;
@@ -198,6 +199,110 @@ pub fn cmd_pretool_test(
         writeln!(
             sinks.stderr,
             "PreToolUse hook ({scope}): {status} at {}",
+            path.display(),
+        )
+        .context("writing to stderr")?;
+        Ok(())
+    }
+}
+
+/// Resolve the guard plugin directory. User scope anchors at `$HOME`;
+/// `--local` anchors at the project so a repo can carry its own guard.
+fn goose_plugin_dir(system: &dyn System, cwd: &Path, local: bool) -> Result<PathBuf> {
+    if local {
+        Ok(goose_install::plugin_dir(cwd))
+    } else {
+        let home = expand_cli_path(system, "~")?;
+        Ok(goose_install::plugin_dir(&home))
+    }
+}
+
+pub fn cmd_goose_pretool_install(
+    sinks: &mut IoSinks<'_>,
+    system: &dyn System,
+    local: bool,
+    json_mode: bool,
+) -> Result<()> {
+    let cwd = env::current_dir().context("resolving current directory")?;
+    let path = goose_plugin_dir(system, &cwd, local)?;
+    let outcome = goose_install::install(system, &path)?;
+    let status = match outcome {
+        goose_install::InstallOutcome::AlreadyInstalled => "already_installed",
+        goose_install::InstallOutcome::Installed => "installed",
+        _ => "unknown",
+    };
+    emit_goose_status(sinks, json_mode, scope_label(local), status, None, &path)
+}
+
+pub fn cmd_goose_pretool_uninstall(
+    sinks: &mut IoSinks<'_>,
+    system: &dyn System,
+    local: bool,
+    json_mode: bool,
+) -> Result<()> {
+    let cwd = env::current_dir().context("resolving current directory")?;
+    let path = goose_plugin_dir(system, &cwd, local)?;
+    let outcome = goose_install::uninstall(system, &path)?;
+    let status = match outcome {
+        goose_install::UninstallOutcome::NotInstalled => "not_installed",
+        goose_install::UninstallOutcome::Uninstalled => "uninstalled",
+        _ => "unknown",
+    };
+    emit_goose_status(sinks, json_mode, scope_label(local), status, None, &path)
+}
+
+pub fn cmd_goose_pretool_test(
+    sinks: &mut IoSinks<'_>,
+    system: &dyn System,
+    local: bool,
+    json_mode: bool,
+) -> Result<()> {
+    let cwd = env::current_dir().context("resolving current directory")?;
+    let path = goose_plugin_dir(system, &cwd, local)?;
+    let outcome = goose_install::test(system, &path)?;
+    let (status, detail) = match outcome {
+        goose_install::TestOutcome::Broken(reason) => ("broken", Some(reason)),
+        goose_install::TestOutcome::Installed => ("installed", None),
+        goose_install::TestOutcome::NotInstalled => ("not_installed", None),
+        _ => ("unknown", None),
+    };
+    emit_goose_status(
+        sinks,
+        json_mode,
+        scope_label(local),
+        status,
+        detail.as_deref(),
+        &path,
+    )
+}
+
+/// Shared status render for the goose plugin lifecycle. `detail` carries
+/// the specific fault behind a `broken` verdict; every other status has
+/// none.
+fn emit_goose_status(
+    sinks: &mut IoSinks<'_>,
+    json_mode: bool,
+    scope: &str,
+    status: &str,
+    detail: Option<&str>,
+    path: &Path,
+) -> Result<()> {
+    if json_mode {
+        print_output(
+            sinks,
+            true,
+            &json!({
+                "status": status,
+                "scope": scope,
+                "detail": detail,
+                "plugin_dir": path.display().to_string(),
+            }),
+        )
+    } else {
+        let suffix = detail.map_or_else(String::new, |reason| format!(" ({reason})"));
+        writeln!(
+            sinks.stderr,
+            "goose guard plugin ({scope}): {status} at {}{suffix}",
             path.display(),
         )
         .context("writing to stderr")?;

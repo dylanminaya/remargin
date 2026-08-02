@@ -1,0 +1,215 @@
+//! Unit tests for `permissions::goose_install` — QA scenarios 7 (install /
+//! uninstall lifecycle) and 8 (the `test` subcommand's three verdicts).
+
+use std::path::{Path, PathBuf};
+
+use os_shim::System;
+use os_shim::mock::MockSystem;
+use serde_json::{Value, json};
+
+use super::{
+    HOOK_EVENT, HOOK_SUBCOMMAND, InstallOutcome, PLUGIN_NAME, TestOutcome, UninstallOutcome,
+    install, plugin_dir, test, uninstall,
+};
+
+const EXE: &str = "/opt/bin/remargin";
+
+fn home() -> PathBuf {
+    PathBuf::from("/home/u")
+}
+
+fn guard_dir() -> PathBuf {
+    plugin_dir(&home())
+}
+
+/// A mock whose `current_exe` is the binary the installer must embed.
+fn mock() -> MockSystem {
+    MockSystem::new()
+        .with_current_exe(Path::new(EXE))
+        .unwrap()
+        .with_file(Path::new(EXE), b"binary")
+        .unwrap()
+}
+
+fn read_json(system: &dyn System, path: &Path) -> Value {
+    serde_json::from_str(&system.read_to_string(path).unwrap()).unwrap()
+}
+
+fn hooks_json(system: &dyn System) -> Value {
+    read_json(system, &guard_dir().join("hooks/hooks.json"))
+}
+
+fn seed(system: MockSystem, path: &Path, body: &str) -> MockSystem {
+    system.with_file(path, body.as_bytes()).unwrap()
+}
+
+fn expect_broken(outcome: TestOutcome) -> String {
+    assert!(
+        matches!(outcome, TestOutcome::Broken(_)),
+        "expected Broken, got {outcome:?}",
+    );
+    let TestOutcome::Broken(reason) = outcome else {
+        return String::new();
+    };
+    reason
+}
+
+#[test]
+fn plugin_dir_lands_under_the_agents_plugins_root() {
+    assert_eq!(
+        guard_dir(),
+        PathBuf::from("/home/u/.agents/plugins").join(PLUGIN_NAME),
+    );
+}
+
+#[test]
+fn install_writes_both_manifests() {
+    let system = mock();
+    assert_eq!(
+        install(&system, &guard_dir()).unwrap(),
+        InstallOutcome::Installed,
+    );
+
+    let manifest = read_json(&system, &guard_dir().join("plugin.json"));
+    assert_eq!(manifest["name"].as_str().unwrap(), PLUGIN_NAME);
+    assert!(manifest["version"].is_string());
+    assert!(manifest["description"].is_string());
+
+    let entries = hooks_json(&system)["hooks"][HOOK_EVENT]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(entries.len(), 1);
+    let hook = entries[0]["hooks"][0].clone();
+    assert_eq!(hook["type"].as_str().unwrap(), "command");
+    assert!(hook["timeout"].is_number());
+}
+
+/// `matcher` is a regex to goose and a bare `*` is silently dropped, so the
+/// generated entry must carry no `matcher` key at all.
+#[test]
+fn generated_hook_entry_carries_no_matcher_key() {
+    let system = mock();
+    install(&system, &guard_dir()).unwrap();
+    let entry = hooks_json(&system)["hooks"][HOOK_EVENT][0].clone();
+    assert!(
+        entry.get("matcher").is_none(),
+        "matcher key must be absent: {entry}",
+    );
+}
+
+/// A `PATH` miss at spawn time fails open upstream, so the command names
+/// the binary absolutely.
+#[test]
+fn generated_hook_command_is_the_absolute_binary_plus_subcommand() {
+    let system = mock();
+    install(&system, &guard_dir()).unwrap();
+    let command = hooks_json(&system)["hooks"][HOOK_EVENT][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(command, format!("{EXE} {HOOK_SUBCOMMAND}"));
+    assert!(Path::new(EXE).is_absolute());
+}
+
+#[test]
+fn install_is_idempotent() {
+    let system = mock();
+    assert_eq!(
+        install(&system, &guard_dir()).unwrap(),
+        InstallOutcome::Installed,
+    );
+    assert_eq!(
+        install(&system, &guard_dir()).unwrap(),
+        InstallOutcome::AlreadyInstalled,
+    );
+}
+
+/// A plugin left over from an install under a different binary path is
+/// rewritten in place rather than left pointing at the stale command.
+#[test]
+fn install_rewrites_a_drifted_hook_command() {
+    let system = seed(
+        mock(),
+        &guard_dir().join("hooks/hooks.json"),
+        &serde_json::to_string_pretty(&json!({
+            "hooks": { HOOK_EVENT: [{ "hooks": [
+                { "type": "command", "command": "/old/remargin goose pretool" },
+            ] }] },
+        }))
+        .unwrap(),
+    );
+    assert_eq!(
+        install(&system, &guard_dir()).unwrap(),
+        InstallOutcome::Installed,
+    );
+    let command = hooks_json(&system)["hooks"][HOOK_EVENT][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(command, format!("{EXE} {HOOK_SUBCOMMAND}"));
+}
+
+#[test]
+fn uninstall_removes_the_guard_and_preserves_sibling_plugins() {
+    let sibling = home().join(".agents/plugins/other-plugin/plugin.json");
+    let system = seed(mock(), &sibling, "{}");
+    install(&system, &guard_dir()).unwrap();
+
+    assert_eq!(
+        uninstall(&system, &guard_dir()).unwrap(),
+        UninstallOutcome::Uninstalled,
+    );
+    assert!(!system.exists(&guard_dir()).unwrap());
+    assert!(system.exists(&sibling).unwrap());
+}
+
+#[test]
+fn uninstall_is_a_no_op_when_absent() {
+    let system = mock();
+    assert_eq!(
+        uninstall(&system, &guard_dir()).unwrap(),
+        UninstallOutcome::NotInstalled,
+    );
+}
+
+#[test]
+fn test_reports_installed_when_wired() {
+    let system = mock();
+    install(&system, &guard_dir()).unwrap();
+    assert_eq!(test(&system, &guard_dir()).unwrap(), TestOutcome::Installed);
+}
+
+#[test]
+fn test_reports_not_installed_when_absent() {
+    let system = mock();
+    assert_eq!(
+        test(&system, &guard_dir()).unwrap(),
+        TestOutcome::NotInstalled,
+    );
+}
+
+/// Three corrupt shapes, all distinguishable from both "wired" and
+/// "absent": unparseable JSON, a manifest with no `PreToolUse` entry, and a
+/// command whose binary has since been removed.
+#[test]
+fn test_reports_broken_for_each_corrupt_shape() {
+    let hooks_file = guard_dir().join("hooks/hooks.json");
+
+    let unparseable = seed(mock(), &hooks_file, "{ not json");
+    let parse_reason = expect_broken(test(&unparseable, &guard_dir()).unwrap());
+    assert!(parse_reason.contains("JSON"), "reason: {parse_reason}");
+
+    let no_entry = seed(mock(), &hooks_file, "{\"hooks\": {}}\n");
+    let entry_reason = expect_broken(test(&no_entry, &guard_dir()).unwrap());
+    assert!(entry_reason.contains(HOOK_EVENT), "reason: {entry_reason}");
+
+    let missing_binary = mock();
+    install(&missing_binary, &guard_dir()).unwrap();
+    missing_binary.remove_file(Path::new(EXE)).unwrap();
+    let binary_reason = expect_broken(test(&missing_binary, &guard_dir()).unwrap());
+    assert!(
+        binary_reason.contains(EXE),
+        "reason should name the binary: {binary_reason}",
+    );
+}

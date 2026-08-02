@@ -28,6 +28,7 @@ use crate::config::{Mode, ResolvedConfig};
 use crate::operations::sandbox;
 use crate::parser::AuthorType;
 use crate::permissions::claude_sync::{self, RuleSet, canonicalize_rule, hook_covered_rules};
+use crate::permissions::goose_install::{self, TestOutcome as GooseTestOutcome};
 use crate::permissions::pretool_install::{self, TestOutcome};
 use crate::permissions::session_guard_install::{self, TestOutcome as GuardTestOutcome};
 
@@ -59,6 +60,16 @@ pub enum FindingKind {
     /// escapes are excluded — they carry their own
     /// [`FindingKind::TrustedRootEscape`].
     ConfigSchemaLint,
+    /// goose is installed and the `remargin-guard` plugin is present, but
+    /// it does not describe a live guard — an unparseable `hooks.json`, no
+    /// `PreToolUse` entry, or a command pointing at a binary that is gone.
+    /// goose fails open on a hook it cannot run, so a broken plugin is
+    /// indistinguishable from no plugin at all from inside a session.
+    GooseGuardBroken,
+    /// goose is installed but the `remargin-guard` plugin is absent from
+    /// both the user-scope and project-scope plugin roots. goose sessions
+    /// can shell and edit remargin-managed paths with no guard.
+    GooseGuardMissing,
     /// The `PreToolUse` hook (`remargin claude pretool`) is absent from
     /// both user-scope and project-scope settings files. No CLI or
     /// native-tool enforcement is active for any managed path in the
@@ -173,6 +184,8 @@ enum LeftoverReason {
 pub enum CheckName {
     /// Permissions-schema faults in the realm's parent walk.
     ConfigSchemaLint,
+    /// The goose guard plugin, when a goose installation is present.
+    GooseGuard,
     /// The `PreToolUse` enforcement hook — always gates the run.
     Hook,
     /// Strict-mode signing-key resolution and agent-key-under-`~/.ssh`.
@@ -193,8 +206,9 @@ impl CheckName {
     /// Every check, in a stable order. Single source of truth for
     /// [`all`](Self::all), [`from_slug`](Self::from_slug), and
     /// [`valid_slugs`](Self::valid_slugs).
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::ConfigSchemaLint,
+        Self::GooseGuard,
         Self::Hook,
         Self::IdentityKey,
         Self::LeftoverRules,
@@ -244,6 +258,7 @@ impl CheckName {
     pub const fn slug(self) -> &'static str {
         match self {
             Self::ConfigSchemaLint => "config-schema-lint",
+            Self::GooseGuard => "goose-guard",
             Self::Hook => "hook",
             Self::IdentityKey => "identity-key",
             Self::LeftoverRules => "leftover-rules",
@@ -350,6 +365,10 @@ pub fn run_doctor(
             ),
             severity: Severity::Critical,
         });
+    }
+
+    if checks.contains(&CheckName::GooseGuard) {
+        findings.extend(goose_guard_findings(system, cwd)?);
     }
 
     // Lint containment before resolving: an out-of-realm entry makes
@@ -483,6 +502,73 @@ fn is_stale_remargin_cli_deny(canonical_rule: &str) -> bool {
         .strip_prefix("Bash(")
         .and_then(|inner| inner.strip_suffix(')'))
         .is_some_and(|inner| inner.split_whitespace().next() == Some("remargin"))
+}
+
+/// Findings for the goose guard plugin.
+///
+/// Silent unless goose is present: `~/.agents` is the root goose discovers
+/// user-scope plugins from, so its absence means there is no goose session
+/// to guard and the check has nothing to say. When goose *is* present, the
+/// guard counts as wired if either plugin scope reports it live; a broken
+/// plugin in either scope is reported ahead of a plain absence because it
+/// names a different repair.
+fn goose_guard_findings(system: &dyn System, cwd: &Path) -> Result<Vec<DoctorFinding>> {
+    let Ok(home_var) = system.env_var("HOME") else {
+        return Ok(Vec::new());
+    };
+    let home = PathBuf::from(home_var);
+    if !system.exists(&goose_install::agents_dir(&home))? {
+        return Ok(Vec::new());
+    }
+
+    let user_dir = goose_install::plugin_dir(&home);
+    let project_dir = goose_install::plugin_dir(cwd);
+    let outcomes = [
+        goose_install::test(system, &user_dir)?,
+        goose_install::test(system, &project_dir)?,
+    ];
+    if outcomes
+        .iter()
+        .any(|outcome| matches!(*outcome, GooseTestOutcome::Installed))
+    {
+        return Ok(Vec::new());
+    }
+    for outcome in &outcomes {
+        if let GooseTestOutcome::Broken(reason) = outcome {
+            return Ok(vec![goose_guard_broken_finding(reason)]);
+        }
+    }
+    Ok(vec![goose_guard_missing_finding(&user_dir, &project_dir)])
+}
+
+fn goose_guard_missing_finding(user_dir: &Path, project_dir: &Path) -> DoctorFinding {
+    DoctorFinding {
+        kind: FindingKind::GooseGuardMissing,
+        message: format!(
+            "goose is installed but the remargin guard plugin is absent from both the user-scope \
+             plugin root ({}) and the project-scope one ({}). A goose session can shell into and \
+             edit remargin-managed paths with no guard at all.",
+            user_dir.display(),
+            project_dir.display(),
+        ),
+        remedy: String::from("Run `remargin goose pretool install` to install the guard plugin."),
+        severity: Severity::Critical,
+    }
+}
+
+fn goose_guard_broken_finding(reason: &str) -> DoctorFinding {
+    DoctorFinding {
+        kind: FindingKind::GooseGuardBroken,
+        message: format!(
+            "The remargin guard plugin for goose is installed but does not describe a live hook: \
+             {reason}. goose fails open on a hook it cannot run, so the session is unguarded with \
+             no signal."
+        ),
+        remedy: String::from(
+            "Run `remargin goose pretool install` to rewrite the guard plugin in place.",
+        ),
+        severity: Severity::Critical,
+    }
 }
 
 fn trusted_root_escape_finding(escape: &TrustedRootEscape) -> DoctorFinding {

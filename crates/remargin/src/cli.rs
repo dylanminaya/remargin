@@ -440,6 +440,13 @@ pub enum Commands {
         #[command(flatten)]
         unrestricted_args: UnrestrictedArgs,
     },
+    /// goose integration: manage the hook plugin that keeps goose
+    /// sessions off remargin-managed paths.
+    Goose {
+        /// Subcommand: `pretool`.
+        #[command(subcommand)]
+        action: GooseAction,
+    },
     /// Resolve, print, or materialize an identity.
     ///
     /// With no subcommand (or `show`), resolves and prints the
@@ -1487,6 +1494,49 @@ pub enum SessionGuardAction {
         local: bool,
     },
     /// Remove the `SessionStart` guard hook entry. Preserves unrelated entries.
+    Uninstall {
+        #[arg(long)]
+        local: bool,
+    },
+}
+
+/// `remargin goose` subcommands. Cohesion bucket for ops scoped to
+/// goose's plugin surface (`~/.agents/plugins/remargin-guard` and its
+/// project-scope twin).
+#[derive(clap::Subcommand)]
+pub enum GooseAction {
+    /// goose `PreToolUse` hook surface.
+    ///
+    /// With no subcommand (or `dispatch`), reads a goose `PreToolUse`
+    /// event JSON envelope from stdin and emits goose's block decision
+    /// on stdout (and its reason on stderr) when the call would touch a
+    /// remargin-managed path. `install` / `uninstall` / `test` manage
+    /// the guard plugin directory.
+    Pretool {
+        #[command(subcommand)]
+        action: Option<GoosePretoolAction>,
+        #[command(flatten)]
+        output_args: OutputArgs,
+    },
+}
+
+/// `remargin goose pretool` subcommands.
+#[derive(clap::Subcommand)]
+pub enum GoosePretoolAction {
+    /// Read a goose `PreToolUse` event from stdin and emit the verdict.
+    Dispatch,
+    /// Write the guard plugin into `~/.agents/plugins/remargin-guard`
+    /// (default) or `.agents/plugins/remargin-guard` with `--local`.
+    Install {
+        #[arg(long)]
+        local: bool,
+    },
+    /// Report whether the guard plugin is wired.
+    Test {
+        #[arg(long)]
+        local: bool,
+    },
+    /// Remove the guard plugin directory. Preserves sibling plugins.
     Uninstall {
         #[arg(long)]
         local: bool,

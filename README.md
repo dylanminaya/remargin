@@ -352,6 +352,22 @@ remargin claude session-guard test
 
 Run `remargin doctor` at any time to confirm both hooks are wired; it reports a critical finding for each missing hook, naming the install command to run.
 
+### goose
+
+[goose](https://github.com/block/goose) has its own hook system, and a goose session with no guard can shell into and edit remargin-managed paths freely. `remargin goose pretool` is the same enforcement brain behind a goose-shaped envelope: it maps goose's namespaced tools (`developer__text_editor`, `developer__shell`) onto the exact decision path the Claude hook uses, so the two hosts cannot enforce different boundaries. remargin's own MCP tools are never intercepted.
+
+```bash
+remargin goose pretool install    # writes ~/.agents/plugins/remargin-guard (--local for project scope)
+remargin goose pretool test       # installed / not_installed / broken, with the specific fault
+remargin goose pretool uninstall  # removes only remargin-guard; sibling plugins survive
+```
+
+goose discovers plugins by their presence on disk, so `install` is the whole registration step. Two properties of the generated plugin are load-bearing and are asserted by tests: the hook entry carries **no `matcher` key** (goose reads `matcher` as a regex and silently drops an invalid one, leaving the guard absent) and the command names the remargin binary by **absolute path** (a `PATH` miss at spawn time is a fail-open pass with no signal).
+
+The guard is fail-closed throughout, which is the opposite of the platform it runs on: goose lets a tool call through when a hook crashes, times out, or prints nothing. So every path that cannot reach a confident allow — an unparseable envelope, a gated tool that does not say what it would touch, an internal resolve failure — blocks, and every block fires on both channels goose accepts (the decision object on stdout, the reason on stderr, exit 2).
+
+`remargin doctor` reports the goose stack too: when goose is installed (`~/.agents` exists) but the guard plugin is missing or broken, it raises a critical finding naming the repair. Run just that check with `remargin doctor --check=goose-guard`.
+
 ### Permissions (optional)
 
 To avoid per-tool confirmation prompts, add this to your Claude Code `settings.local.json`:
@@ -717,7 +733,7 @@ permissions:
 ```
 
 - **Layer 1 (remargin-core, CLI + MCP, per-op).** Every mutating op parent-walks `.remargin.yaml` and refuses ops outside the `trusted_roots` allow-list or matching `deny_ops`. The walk runs fresh on every call — no cache, no reload command, no mtime watcher. Editing `.remargin.yaml` between two ops takes effect on the second op without a restart.
-- **Layer 2 (Claude Code `PreToolUse` hook, native tools).** The `remargin claude pretool` hook inspects every gated tool call (`Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Grep`, `Glob`, `Bash`) and denies the ones that would touch a managed path, redirecting the agent to the matching `mcp__remargin__*` op. It resolves the boundary from `.remargin.yaml` on every call and is **the single source of truth** for native-tool enforcement — `remargin claude restrict` no longer projects `permissions.deny` rules into the settings files. Run `remargin doctor` to confirm the hook is wired and to find (and clear) any leftover projected rules an older restrict left behind.
+- **Layer 2 (`PreToolUse` hooks, native tools).** The `remargin claude pretool` hook inspects every gated tool call (`Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Grep`, `Glob`, `Bash`) and denies the ones that would touch a managed path, redirecting the agent to the matching `mcp__remargin__*` op. It resolves the boundary from `.remargin.yaml` on every call and is **the single source of truth** for native-tool enforcement — `remargin claude restrict` no longer projects `permissions.deny` rules into the settings files. `remargin goose pretool` is the same decision path behind goose's envelope, so a goose session sees the identical boundary. Run `remargin doctor` to confirm both hooks are wired and to find (and clear) any leftover projected rules an older restrict left behind.
 
 The single exception to per-op evaluation is `trusted_roots`, which defines the MCP server's filesystem sandbox at boot time — the sandbox cannot be expanded mid-session.
 
@@ -888,7 +904,10 @@ Returns a projection of any mutating op (`ack`, `batch`, `comment`, `cp`, `delet
 | `claude plugin install` | Register the marketplace and install the Claude Code plugin |
 | `claude plugin uninstall` | Uninstall the Claude Code plugin |
 | `claude plugin test` | Check plugin installation status |
-| `doctor` | Check realm health: hooks wired, config schema across the realm tree, identity/key resolvability, trusted-root existence, sandbox staging hygiene, project-scope settings. `--check=<set>` runs a named subset of checks |
+| `goose pretool install [--local]` | Write the goose guard plugin to `~/.agents/plugins/remargin-guard` (or the project scope) |
+| `goose pretool uninstall [--local]` | Remove the goose guard plugin, preserving sibling plugins |
+| `goose pretool test [--local]` | Report whether the goose guard plugin is wired, absent, or broken |
+| `doctor` | Check realm health: hooks wired (Claude and goose), config schema across the realm tree, identity/key resolvability, trusted-root existence, sandbox staging hygiene, project-scope settings. `--check=<set>` runs a named subset of checks |
 | `claude restrict` | Add permission rules (sync to `.claude/settings.local.json` and `~/.claude/settings.json`) |
 | `claude unrestrict` | Reverse a previous `restrict` cleanly |
 | `registry show` | Display the participant registry |
