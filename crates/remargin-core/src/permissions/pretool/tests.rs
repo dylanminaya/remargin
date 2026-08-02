@@ -81,6 +81,17 @@ fn deny_reason(decision: &Decision) -> &str {
         .as_str()
 }
 
+/// Pins which branch produced a `Deny`: only the fail-closed in-realm-cwd
+/// branch names the caller's working directory, so its absence proves the
+/// token-loop / ancestor-destructive path is what ran.
+fn assert_not_in_realm_cwd_deny(decision: &Decision) {
+    assert!(
+        !deny_reason(decision).contains("working directory"),
+        "expected a token-loop deny, got the in-realm-cwd deny: {}",
+        deny_reason(decision),
+    );
+}
+
 /// Test 1: `Read` on unrestricted path → `SilentAllow`.
 #[test]
 fn read_on_unrestricted_path_silent_allows() {
@@ -1159,11 +1170,14 @@ fn deny_ops_only_path_bash_rm_denies() {
 
 /// Unify 3: a wildcard `trusted_roots` realm still denies a `Bash rm` of a
 /// path inside it — trusted-root coverage is unchanged by the unification.
+/// The cwd sits outside the realm so the token loop is what denies — an
+/// in-realm cwd would fail closed before the path argument is weighed.
 #[test]
 fn wildcard_trusted_roots_bash_rm_denies() {
     let system = mock_with(&[("/r/.remargin.yaml", &restrict_yaml("'*'"))]);
-    let stdin = event_json("Bash", "/r", &json!({ "command": "rm /r/x.md" }));
-    assert!(matches!(pretool(&system, &stdin), PretoolOutcome::Deny(_)));
+    let stdin = event_json("Bash", "/x", &json!({ "command": "rm /r/x.md" }));
+    let decision = expect_deny(pretool(&system, &stdin));
+    assert_not_in_realm_cwd_deny(&decision);
 }
 
 /// Unify 4: a path in neither `deny_ops` nor `trusted_roots` silent-allows.
@@ -1333,11 +1347,14 @@ fn bash_wildcard_cargo_build_release_denies() {
 
 /// A real path argument into the wildcard realm still denies — the
 /// path-evidence carve-out never lifts an actual managed-path reference.
+/// The cwd sits outside the realm so the token loop is what weighs the
+/// argument — an in-realm cwd would fail closed before it is read.
 #[test]
 fn bash_wildcard_real_path_argument_denies() {
     let system = mock_with(&[("/r/.remargin.yaml", &restrict_yaml("'*'"))]);
-    let stdin = event_json("Bash", "/r", &json!({ "command": "rm /r/x.md" }));
-    assert!(matches!(pretool(&system, &stdin), PretoolOutcome::Deny(_)));
+    let stdin = event_json("Bash", "/x", &json!({ "command": "rm /r/x.md" }));
+    let decision = expect_deny(pretool(&system, &stdin));
+    assert_not_in_realm_cwd_deny(&decision);
 }
 
 /// After a tracked `cd` into a wildcard realm, a bare-name mutator argument
@@ -1790,12 +1807,15 @@ fn read_ancestor_realm_file_silent_allows() {
 // ---------------------------------------------------------------------
 
 /// `rm /r` under a wildcard realm rooted at `/r` destroys the entire realm →
-/// `Deny`, consistent with the absolute-root case.
+/// `Deny`, consistent with the absolute-root case. The cwd sits outside the
+/// realm so the ancestor-destructive gate is what denies — an in-realm cwd
+/// would fail closed before the gate is reached.
 #[test]
 fn bash_rm_wildcard_realm_root_denies() {
     let system = mock_with(&[("/r/.remargin.yaml", &restrict_yaml("'*'"))]);
-    let stdin = event_json("Bash", "/r", &json!({ "command": "rm /r" }));
-    assert!(matches!(pretool(&system, &stdin), PretoolOutcome::Deny(_)));
+    let stdin = event_json("Bash", "/x", &json!({ "command": "rm /r" }));
+    let decision = expect_deny(pretool(&system, &stdin));
+    assert_not_in_realm_cwd_deny(&decision);
 }
 
 /// `ls /r` under a wildcard realm rooted at `/r` only reads the realm root →
@@ -1820,11 +1840,14 @@ fn grep_wildcard_realm_root_denies() {
 
 /// `rm /r/x.md` under a wildcard realm still denies through the normal,
 /// verb-independent at/below path -- the ancestor work does not disturb it.
+/// The cwd sits outside the realm so the token loop is what runs -- an
+/// in-realm cwd would fail closed before the at/below match is made.
 #[test]
 fn bash_rm_wildcard_subpath_still_denies() {
     let system = mock_with(&[("/r/.remargin.yaml", &restrict_yaml("'*'"))]);
-    let stdin = event_json("Bash", "/r", &json!({ "command": "rm /r/x.md" }));
-    assert!(matches!(pretool(&system, &stdin), PretoolOutcome::Deny(_)));
+    let stdin = event_json("Bash", "/x", &json!({ "command": "rm /r/x.md" }));
+    let decision = expect_deny(pretool(&system, &stdin));
+    assert_not_in_realm_cwd_deny(&decision);
 }
 
 /// The documented blind spot: a candidate ABOVE the realm root cannot be
