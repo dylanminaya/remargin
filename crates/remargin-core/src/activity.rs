@@ -191,6 +191,7 @@ pub struct CompactFileChanges {
     pub changes: Vec<CompactChangeRow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cutoff_applied: Option<DateTime<FixedOffset>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub newest_ts: Option<DateTime<FixedOffset>>,
     pub path: PathBuf,
 }
@@ -271,14 +272,16 @@ pub fn to_compact_activity(result: &ActivityResult) -> Value {
     })
 }
 
-/// One compact per-file record: `path` / `newest_ts` stay named,
-/// `cutoff_applied` stays named when present, `changes` become positional
-/// rows.
+/// One compact per-file record: `path` stays named, `newest_ts` /
+/// `cutoff_applied` stay named when present (absent when unset, never
+/// `null`), `changes` become positional rows.
 fn to_compact_file(file: &FileChanges) -> Value {
     let changes: Vec<CompactChangeRow> = file.changes.iter().map(to_compact_row).collect();
     let mut obj = serde_json::Map::new();
     obj.insert(String::from("path"), json!(file.path));
-    obj.insert(String::from("newest_ts"), json!(file.newest_ts));
+    if let Some(newest) = file.newest_ts {
+        obj.insert(String::from("newest_ts"), json!(newest));
+    }
     if let Some(cutoff) = file.cutoff_applied {
         obj.insert(String::from("cutoff_applied"), json!(cutoff));
     }

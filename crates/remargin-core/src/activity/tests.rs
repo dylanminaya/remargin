@@ -632,6 +632,33 @@ fn compact_activity_envelope_shape() {
     assert!(sandbox[8].is_null(), "sandbox to null");
 }
 
+/// An unset `newest_ts` is absent from the wire, never `null`, on both
+/// serialization surfaces (hand-built compact map and derived `Serialize`).
+#[test]
+fn unset_newest_ts_is_omitted_not_nulled() {
+    use crate::activity::{CompactFileChanges, FileChanges, to_compact_file};
+
+    let file = FileChanges {
+        changes: Vec::new(),
+        cutoff_applied: None,
+        newest_ts: None,
+        path: PathBuf::from("/r/note.md"),
+    };
+    let compact = to_compact_file(&file);
+    let obj = compact.as_object().unwrap();
+    assert!(!obj.contains_key("newest_ts"), "{compact:#}");
+    assert!(!obj.contains_key("cutoff_applied"), "{compact:#}");
+
+    let anchor = CompactFileChanges {
+        changes: Vec::new(),
+        cutoff_applied: None,
+        newest_ts: None,
+        path: PathBuf::from("/r/note.md"),
+    };
+    let json = serde_json::to_string(&anchor).unwrap();
+    assert!(!json.contains("newest_ts"), "{json}");
+}
+
 /// Codegen contract: the compact change-row alias renders its `Option`
 /// tuple columns as nullable in TS and Zod (relies on the pinned tixschema
 /// nullable-in-tuple support), and the per-file record carries the row by
