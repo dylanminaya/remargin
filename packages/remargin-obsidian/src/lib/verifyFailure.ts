@@ -30,10 +30,6 @@ export function parseVerifyFailure(err: unknown): VerifyFailure | null {
   } catch {
     return null;
   }
-  // elapsed_ms is injected onto every payload, including error payloads.
-  if (parsed && typeof parsed === "object") {
-    delete (parsed as Record<string, unknown>).elapsed_ms;
-  }
   const result = VerifyFailurePayload$Schema.safeParse(parsed);
   return result.success ? result.data : null;
 }

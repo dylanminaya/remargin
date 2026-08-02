@@ -37,7 +37,22 @@ describe("parseVerifyFailure", () => {
     assert.strictEqual(parsed?.failures.length, 2);
     assert.strictEqual(parsed?.path, "/d/a.md");
     assert.strictEqual(parsed?.mode, "strict");
+    assert.strictEqual(parsed?.elapsed_ms, 12);
     assert.match(parsed?.headline ?? "", /^verify failed:/u);
+  });
+
+  it("leaves elapsed_ms absent when the CLI did not inject it", () => {
+    const payload = JSON.stringify({
+      error_kind: "verify_failed",
+      failures: [{ checksum_ok: true, id: "abc", recipients: "ok", signature: "missing" }],
+      headline: "verify failed: 1 unsigned or invalid comment in /d/a.md",
+      hint: "Try ...",
+      mode: "strict",
+      path: "/d/a.md",
+    });
+    const parsed = parseVerifyFailure(new Error(payload));
+    assert.ok(parsed !== null);
+    assert.strictEqual(parsed?.elapsed_ms, undefined);
   });
 
   it("ignores leading text before the JSON object", () => {
