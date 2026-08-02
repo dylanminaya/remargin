@@ -1,11 +1,17 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import {
+  AuthorType$Schema,
+  CpKind$Schema,
+  CpOutcome$Schema,
+  DoctorFinding$Schema,
   DoctorReport$Schema,
   ReplaceFileOutcome$Schema,
   ReplaceReport$Schema,
   SandboxListEntry$Schema,
   SandboxRemoveReport$Schema,
+  Severity$Schema,
+  VerifyErrorKind$Schema,
 } from "@/generated";
 
 // Every payload below is REAL `remargin <cmd> --json` stdout captured from the
@@ -102,5 +108,84 @@ describe("nested schemas — no elapsed_ms member", () => {
     const element = JSON.parse(SANDBOX_LIST_ENTRY);
     assert.equal(SandboxListEntry$Schema.parse(element).path, "doc.md");
     assert.equal(SandboxListEntry$Schema.safeParse({ ...element, elapsed_ms: 2 }).success, false);
+  });
+});
+
+// serde emits enum variants in the casing `rename_all` names — snake_case for
+// CpKind, Severity, and FindingKind — and the generated schemas must carry those
+// exact strings. Captured from a scratch realm, so the absolute paths below are
+// the temp directory the CLI really ran in.
+
+const CP_VERBATIM = `{
+  "bytes_copied": 69,
+  "comments_dropped": 0,
+  "dst_absolute": "/tmp/claude-1000/-home-eduardoburgos-src-tixena-remargin/67951bdc-457f-48df-9a53-621de3f2f183/scratchpad/jwa6/realm/verbatim_copy.md",
+  "elapsed_ms": 2,
+  "kind": "verbatim",
+  "overwritten": false,
+  "src_absolute": "/tmp/claude-1000/-home-eduardoburgos-src-tixena-remargin/67951bdc-457f-48df-9a53-621de3f2f183/scratchpad/jwa6/realm/doc.md"
+}`;
+
+const CP_BODY_ONLY = `{
+  "bytes_copied": 506,
+  "comments_dropped": 1,
+  "dst_absolute": "/tmp/claude-1000/-home-eduardoburgos-src-tixena-remargin/67951bdc-457f-48df-9a53-621de3f2f183/scratchpad/jwa6/realm/body_copy.md",
+  "elapsed_ms": 2,
+  "kind": "body_only",
+  "overwritten": true,
+  "src_absolute": "/tmp/claude-1000/-home-eduardoburgos-src-tixena-remargin/67951bdc-457f-48df-9a53-621de3f2f183/scratchpad/jwa6/realm/doc.md"
+}`;
+
+const DOCTOR_WITH_FINDING = `{
+  "elapsed_ms": 1,
+  "findings": [
+    {
+      "kind": "hook_missing",
+      "message": "The PreToolUse hook (\`remargin claude pretool\`) is not registered in either the user-scope settings (/tmp/claude-1000/-home-eduardoburgos-src-tixena-remargin/67951bdc-457f-48df-9a53-621de3f2f183/scratchpad/jwa6/home/.claude/settings.json) or the project-scope settings (/tmp/claude-1000/-home-eduardoburgos-src-tixena-remargin/67951bdc-457f-48df-9a53-621de3f2f183/scratchpad/jwa6/realm/.claude/settings.json). No enforcement is active — agents can invoke the remargin CLI and bypass path restrictions without restriction.",
+      "remedy": "Run \`remargin claude pretool install\` to register the hook.",
+      "severity": "critical"
+    }
+  ],
+  "hook_installed": false,
+  "project_settings_file": "/tmp/claude-1000/-home-eduardoburgos-src-tixena-remargin/67951bdc-457f-48df-9a53-621de3f2f183/scratchpad/jwa6/realm/.claude/settings.json",
+  "session_guard_installed": false,
+  "user_settings_file": "/tmp/claude-1000/-home-eduardoburgos-src-tixena-remargin/67951bdc-457f-48df-9a53-621de3f2f183/scratchpad/jwa6/home/.claude/settings.json"
+}`;
+
+describe("enum wire casing — live payloads carry serde's snake_case", () => {
+  it("cp verbatim: the whole payload parses and kind is snake_case", () => {
+    const outcome = CpOutcome$Schema.parse(JSON.parse(CP_VERBATIM));
+    assert.equal(outcome.kind, "verbatim");
+    assert.equal(outcome.comments_dropped, 0);
+  });
+
+  it("cp body_only: the whole payload parses and kind is snake_case", () => {
+    const outcome = CpOutcome$Schema.parse(JSON.parse(CP_BODY_ONLY));
+    assert.equal(outcome.kind, "body_only");
+    assert.equal(outcome.comments_dropped, 1);
+  });
+
+  it("doctor: a non-empty findings array parses with snake_case kind and severity", () => {
+    const report = DoctorReport$Schema.parse(JSON.parse(DOCTOR_WITH_FINDING));
+    assert.equal(report.findings.length, 1);
+    assert.equal(report.findings[0].kind, "hook_missing");
+    assert.equal(report.findings[0].severity, "critical");
+  });
+
+  it("the raw Rust identifiers the old generator emitted are rejected", () => {
+    assert.equal(CpKind$Schema.safeParse("Verbatim").success, false);
+    assert.equal(CpKind$Schema.safeParse("BodyOnly").success, false);
+    assert.equal(Severity$Schema.safeParse("Critical").success, false);
+    const finding = JSON.parse(DOCTOR_WITH_FINDING).findings[0];
+    assert.equal(
+      DoctorFinding$Schema.safeParse({ ...finding, kind: "HookMissing" }).success,
+      false
+    );
+  });
+
+  it("enums that were already correct are unchanged", () => {
+    assert.equal(AuthorType$Schema.parse("agent"), "agent");
+    assert.equal(AuthorType$Schema.parse("human"), "human");
+    assert.equal(VerifyErrorKind$Schema.parse("verify_failed"), "verify_failed");
   });
 });
