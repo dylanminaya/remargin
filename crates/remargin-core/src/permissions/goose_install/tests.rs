@@ -8,8 +8,9 @@ use os_shim::mock::MockSystem;
 use serde_json::{Value, json};
 
 use super::{
-    HOOK_EVENT, HOOK_SUBCOMMAND, InstallOutcome, PLUGIN_NAME, TestOutcome, UninstallOutcome,
-    install, plugin_dir, test, uninstall,
+    HOOK_EVENT, HOOK_SUBCOMMAND, InstallOutcome, PLUGIN_NAME, SESSION_HOOK_EVENT,
+    SESSION_HOOK_SUBCOMMAND, TestOutcome, UninstallOutcome, install, install_session_guard,
+    plugin_dir, test, test_session_guard, uninstall, uninstall_session_guard,
 };
 
 const EXE: &str = "/opt/bin/remargin";
@@ -208,6 +209,213 @@ fn test_reports_broken_for_each_corrupt_shape() {
     install(&missing_binary, &guard_dir()).unwrap();
     missing_binary.remove_file(Path::new(EXE)).unwrap();
     let binary_reason = expect_broken(test(&missing_binary, &guard_dir()).unwrap());
+    assert!(
+        binary_reason.contains(EXE),
+        "reason should name the binary: {binary_reason}",
+    );
+}
+
+// ---- SessionStart entry ------------------------------------------------
+
+fn session_entries(system: &dyn System) -> Vec<Value> {
+    hooks_json(system)["hooks"][SESSION_HOOK_EVENT]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn pretool_entries(system: &dyn System) -> Vec<Value> {
+    hooks_json(system)["hooks"][HOOK_EVENT]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The `SessionStart` entry lands beside the `PreToolUse` one in the same
+/// manifest, with the same no-matcher / absolute-binary shape.
+#[test]
+fn session_guard_install_adds_its_entry_beside_the_pretool_one() {
+    let system = mock();
+    install(&system, &guard_dir()).unwrap();
+    assert_eq!(
+        install_session_guard(&system, &guard_dir()).unwrap(),
+        InstallOutcome::Installed,
+    );
+
+    assert_eq!(pretool_entries(&system).len(), 1, "PreToolUse must survive");
+    let entries = session_entries(&system);
+    assert_eq!(entries.len(), 1);
+    assert!(
+        entries[0].get("matcher").is_none(),
+        "matcher key must be absent: {}",
+        entries[0],
+    );
+    let hook = entries[0]["hooks"][0].clone();
+    assert_eq!(hook["type"].as_str().unwrap(), "command");
+    assert_eq!(
+        hook["command"].as_str().unwrap(),
+        format!("{EXE} {SESSION_HOOK_SUBCOMMAND}"),
+    );
+}
+
+/// The plugin does not have to exist first — the guard installs it.
+#[test]
+fn session_guard_install_creates_the_plugin_when_absent() {
+    let system = mock();
+    assert_eq!(
+        install_session_guard(&system, &guard_dir()).unwrap(),
+        InstallOutcome::Installed,
+    );
+    assert!(system.exists(&guard_dir().join("plugin.json")).unwrap());
+    assert_eq!(session_entries(&system).len(), 1);
+    assert_eq!(
+        install_session_guard(&system, &guard_dir()).unwrap(),
+        InstallOutcome::AlreadyInstalled,
+    );
+}
+
+/// Both entries live in one manifest, so installing either must merge
+/// rather than rewrite: a pretool install after a session-guard install
+/// used to take the guard down with it.
+#[test]
+fn pretool_install_preserves_the_session_guard_entry() {
+    let system = mock();
+    install_session_guard(&system, &guard_dir()).unwrap();
+    install(&system, &guard_dir()).unwrap();
+
+    assert_eq!(
+        session_entries(&system).len(),
+        1,
+        "SessionStart must survive"
+    );
+    assert_eq!(pretool_entries(&system).len(), 1);
+}
+
+/// An entry the user added under a managed event is not ours to remove.
+#[test]
+fn install_preserves_entries_it_does_not_own() {
+    let system = seed(
+        mock(),
+        &guard_dir().join("hooks/hooks.json"),
+        &serde_json::to_string_pretty(&json!({
+            "hooks": {
+                SESSION_HOOK_EVENT: [{ "hooks": [
+                    { "type": "command", "command": "/usr/bin/notify-me" },
+                ] }],
+                "Stop": [{ "hooks": [
+                    { "type": "command", "command": "/usr/bin/cleanup" },
+                ] }],
+            },
+        }))
+        .unwrap(),
+    );
+    install_session_guard(&system, &guard_dir()).unwrap();
+
+    let entries = session_entries(&system);
+    assert_eq!(
+        entries.len(),
+        2,
+        "the user's entry must survive: {entries:?}"
+    );
+    assert!(
+        hooks_json(&system)["hooks"]["Stop"].is_array(),
+        "an unmanaged event must survive",
+    );
+}
+
+/// Uninstalling the guard leaves the `PreToolUse` entry — and the plugin
+/// itself — in place.
+#[test]
+fn session_guard_uninstall_removes_only_its_own_entry() {
+    let system = mock();
+    install(&system, &guard_dir()).unwrap();
+    install_session_guard(&system, &guard_dir()).unwrap();
+
+    assert_eq!(
+        uninstall_session_guard(&system, &guard_dir()).unwrap(),
+        UninstallOutcome::Uninstalled,
+    );
+    assert!(system.exists(&guard_dir()).unwrap(), "plugin must survive");
+    assert!(session_entries(&system).is_empty());
+    assert_eq!(pretool_entries(&system).len(), 1);
+    assert_eq!(test(&system, &guard_dir()).unwrap(), TestOutcome::Installed);
+}
+
+/// The reverse direction: removing the `PreToolUse` entry leaves the
+/// `SessionStart` one wired.
+#[test]
+fn pretool_uninstall_leaves_the_session_guard_entry() {
+    let system = mock();
+    install(&system, &guard_dir()).unwrap();
+    install_session_guard(&system, &guard_dir()).unwrap();
+
+    assert_eq!(
+        uninstall(&system, &guard_dir()).unwrap(),
+        UninstallOutcome::Uninstalled,
+    );
+    assert!(system.exists(&guard_dir()).unwrap(), "plugin must survive");
+    assert_eq!(session_entries(&system).len(), 1);
+}
+
+/// The last managed entry takes the plugin directory with it — nothing is
+/// left behind for goose to discover.
+#[test]
+fn session_guard_uninstall_removes_the_plugin_when_it_was_the_last_entry() {
+    let system = mock();
+    install_session_guard(&system, &guard_dir()).unwrap();
+    assert_eq!(
+        uninstall_session_guard(&system, &guard_dir()).unwrap(),
+        UninstallOutcome::Uninstalled,
+    );
+    assert!(!system.exists(&guard_dir()).unwrap());
+}
+
+/// A pretool-only plugin is untouched by a session-guard uninstall.
+#[test]
+fn session_guard_uninstall_is_a_no_op_on_a_pretool_only_plugin() {
+    let system = mock();
+    install(&system, &guard_dir()).unwrap();
+    assert_eq!(
+        uninstall_session_guard(&system, &guard_dir()).unwrap(),
+        UninstallOutcome::NotInstalled,
+    );
+    assert_eq!(pretool_entries(&system).len(), 1);
+}
+
+/// A pretool-only plugin means the session guard is simply not installed —
+/// the shared directory's presence says nothing about this entry.
+#[test]
+fn session_guard_test_reports_not_installed_for_a_pretool_only_plugin() {
+    let system = mock();
+    install(&system, &guard_dir()).unwrap();
+    assert_eq!(
+        test_session_guard(&system, &guard_dir()).unwrap(),
+        TestOutcome::NotInstalled,
+    );
+}
+
+#[test]
+fn session_guard_test_reports_installed_when_wired() {
+    let system = mock();
+    install_session_guard(&system, &guard_dir()).unwrap();
+    assert_eq!(
+        test_session_guard(&system, &guard_dir()).unwrap(),
+        TestOutcome::Installed,
+    );
+}
+
+/// The two corrupt shapes that are not "absent": an unreadable manifest and
+/// an entry whose binary has since been removed.
+#[test]
+fn session_guard_test_reports_broken_for_corrupt_shapes() {
+    let unparseable = seed(mock(), &guard_dir().join("hooks/hooks.json"), "{ not json");
+    let parse_reason = expect_broken(test_session_guard(&unparseable, &guard_dir()).unwrap());
+    assert!(parse_reason.contains("JSON"), "reason: {parse_reason}");
+
+    let missing_binary = mock();
+    install_session_guard(&missing_binary, &guard_dir()).unwrap();
+    missing_binary.remove_file(Path::new(EXE)).unwrap();
+    let binary_reason = expect_broken(test_session_guard(&missing_binary, &guard_dir()).unwrap());
     assert!(
         binary_reason.contains(EXE),
         "reason should name the binary: {binary_reason}",

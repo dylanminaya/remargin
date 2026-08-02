@@ -25,9 +25,10 @@ use crate::params::{
     ReplaceParams, RestrictParams, SearchOutputMode, SearchParams, SignParams, WriteParams,
 };
 use crate::{
-    AssetsArgs, ClaudeAction, Cli, Commands, GooseAction, GoosePretoolAction, IdentityArgs,
-    OutputArgs, PermissionsAction, PlanAction, PlanClaudeAction, PluginAction, PretoolAction,
-    PromptAction, SessionGuardAction, UnrestrictedArgs,
+    AssetsArgs, ClaudeAction, Cli, Commands, GooseAction, GoosePretoolAction,
+    GooseSessionGuardAction, IdentityArgs, OutputArgs, PermissionsAction, PlanAction,
+    PlanClaudeAction, PluginAction, PretoolAction, PromptAction, SessionGuardAction,
+    UnrestrictedArgs,
 };
 use remargin_core::config::identity::IdentityFlags;
 use remargin_core::config::{self, ResolvedConfig};
@@ -35,6 +36,9 @@ use remargin_core::document;
 use remargin_core::operations;
 use remargin_core::operations::replace;
 use remargin_core::permissions::goose_pretool::{BlockDecision, GooseVerdict, goose_pretool};
+use remargin_core::permissions::goose_session_guard::{
+    GuardOutcome as GooseGuardOutcome, goose_session_guard,
+};
 use remargin_core::permissions::pretool::{PretoolOutcome, pretool};
 use remargin_core::permissions::session_guard::{GuardOutcome, session_guard};
 
@@ -133,7 +137,8 @@ const fn claude_action_output(action: &ClaudeAction) -> &OutputArgs {
 /// Pull the per-action [`OutputArgs`] from a [`GooseAction`] variant.
 const fn goose_action_output(action: &GooseAction) -> &OutputArgs {
     match action {
-        GooseAction::Pretool { output_args, .. } => output_args,
+        GooseAction::Pretool { output_args, .. }
+        | GooseAction::SessionGuard { output_args, .. } => output_args,
     }
 }
 
@@ -599,7 +604,7 @@ fn try_dispatch_config_free(
             handlers::cmd_permissions(sinks, system, cwd, action).map(Some)
         }
         Commands::Claude { action } => handle_claude(action, sinks, system, cwd).map(Some),
-        Commands::Goose { action } => handle_goose(action, sinks, system).map(Some),
+        Commands::Goose { action } => handle_goose(action, sinks, system, cwd).map(Some),
         #[cfg(feature = "session")]
         Commands::Session { action } => handlers::cmd_session(sinks, system, cwd, action).map(Some),
         _ => {
@@ -889,12 +894,76 @@ fn handle_claude_pretool_dispatch(sinks: &mut IoSinks<'_>, system: &dyn System) 
     }
 }
 
-fn handle_goose(action: &GooseAction, sinks: &mut IoSinks<'_>, system: &dyn System) -> Result<()> {
+fn handle_goose(
+    action: &GooseAction,
+    sinks: &mut IoSinks<'_>,
+    system: &dyn System,
+    cwd: &Path,
+) -> Result<()> {
     match action {
         GooseAction::Pretool {
             action: pretool_action,
             output_args,
         } => handle_goose_pretool_action(sinks, system, pretool_action.as_ref(), output_args.json),
+        GooseAction::SessionGuard {
+            action: guard_action,
+            output_args,
+        } => handle_goose_session_guard_action(
+            sinks,
+            system,
+            cwd,
+            guard_action.as_ref(),
+            output_args.json,
+        ),
+    }
+}
+
+/// Route `remargin goose session-guard [subcommand]`. With no subcommand
+/// (or `dispatch`), runs the `SessionStart` diagnostic. The install /
+/// uninstall / test variants manage the entry in the shared guard plugin.
+fn handle_goose_session_guard_action(
+    sinks: &mut IoSinks<'_>,
+    system: &dyn System,
+    cwd: &Path,
+    action: Option<&GooseSessionGuardAction>,
+    json_mode: bool,
+) -> Result<()> {
+    match action {
+        None | Some(GooseSessionGuardAction::Dispatch) => {
+            handle_goose_session_guard_dispatch(sinks, system, cwd)
+        }
+        Some(GooseSessionGuardAction::Install { local }) => {
+            handlers::cmd_goose_session_guard_install(sinks, system, *local, json_mode)
+        }
+        Some(GooseSessionGuardAction::Test { local }) => {
+            handlers::cmd_goose_session_guard_test(sinks, system, *local, json_mode)
+        }
+        Some(GooseSessionGuardAction::Uninstall { local }) => {
+            handlers::cmd_goose_session_guard_uninstall(sinks, system, *local, json_mode)
+        }
+    }
+}
+
+/// Runs the goose `SessionStart` guard and emits the outcome. Always exits
+/// 0 with the diagnostic on stdout: `SessionStart` carries no blocking
+/// decision in goose, and a non-zero exit is a hook failure the platform
+/// swallows — the diagnostic would go with it. A healthy stack emits
+/// nothing.
+fn handle_goose_session_guard_dispatch(
+    sinks: &mut IoSinks<'_>,
+    system: &dyn System,
+    cwd: &Path,
+) -> Result<()> {
+    let mut buf = Vec::new();
+    stdin_handle()
+        .read_to_end(&mut buf)
+        .context("reading stdin for goose session-guard")?;
+    match goose_session_guard(system, &buf, cwd) {
+        GooseGuardOutcome::Fail(diagnostic) => {
+            writeln!(sinks.stdout, "{diagnostic}").context("writing session guard diagnostic")
+        }
+        GooseGuardOutcome::Ok => Ok(()),
+        _ => Err(anyhow::anyhow!("unexpected goose session guard outcome")),
     }
 }
 

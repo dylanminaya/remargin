@@ -1502,7 +1502,7 @@ fn parse_set_trims_and_all_is_complete() {
     assert_eq!(parsed, expected);
     assert_eq!(
         CheckName::all().len(),
-        9,
+        10,
         "every check has exactly one slug",
     );
     assert!(CheckName::parse_set("").unwrap().is_empty());
@@ -1663,6 +1663,161 @@ fn goose_guard_check_is_selectable_by_slug() {
     .unwrap();
     assert!(
         !kinds(&deselected).contains(&FindingKind::GooseGuardMissing),
+        "deselected check must not report: {deselected:#?}",
+    );
+}
+
+// ---- goose SessionStart backstop ----------------------------------------
+
+/// A manifest carrying the `PreToolUse` entry and, optionally, the
+/// `SessionStart` backstop beside it.
+fn goose_hooks_json_with_session(binary: &str) -> String {
+    let v = json!({
+        "hooks": {
+            "PreToolUse": [{ "hooks": [
+                { "type": "command", "command": format!("{binary} goose pretool") },
+            ] }],
+            "SessionStart": [{ "hooks": [
+                { "type": "command", "command": format!("{binary} goose session-guard") },
+            ] }],
+        },
+    });
+    serde_json::to_string_pretty(&v).unwrap()
+}
+
+/// No goose installation means no backstop finding either.
+#[test]
+fn goose_absent_produces_no_session_guard_finding() {
+    let report = run_goose_doctor(&goose_mock(&[]));
+    assert!(
+        !kinds(&report).contains(&FindingKind::GooseSessionGuardMissing),
+        "no goose installed, so no backstop finding: {report:#?}",
+    );
+}
+
+/// A guard plugin wired for `PreToolUse` only: the blocking guard is live,
+/// but nothing reports it when it breaks.
+#[test]
+fn goose_guard_without_the_session_entry_is_flagged() {
+    let system = goose_mock(&[
+        ("/opt/bin/remargin", "binary"),
+        (
+            "/home/u/.agents/plugins/remargin-guard/hooks/hooks.json",
+            &goose_hooks_json("/opt/bin/remargin goose pretool"),
+        ),
+    ]);
+    let report = run_goose_doctor(&system);
+    assert!(
+        !kinds(&report).contains(&FindingKind::GooseGuardMissing),
+        "the PreToolUse guard is wired: {report:#?}",
+    );
+    let finding = report
+        .findings
+        .iter()
+        .find(|f| f.kind == FindingKind::GooseSessionGuardMissing)
+        .unwrap();
+    assert_eq!(finding.severity, Severity::Critical);
+    assert!(
+        finding
+            .remedy
+            .contains("remargin goose session-guard install"),
+        "remedy should name the install command: {finding:#?}",
+    );
+}
+
+/// Both entries wired clears both goose checks.
+#[test]
+fn goose_with_the_session_entry_is_clean() {
+    let system = goose_mock(&[
+        ("/opt/bin/remargin", "binary"),
+        (
+            "/home/u/.agents/plugins/remargin-guard/hooks/hooks.json",
+            &goose_hooks_json_with_session("/opt/bin/remargin"),
+        ),
+    ]);
+    let report = run_goose_doctor(&system);
+    assert!(
+        !kinds(&report).iter().any(|k| matches!(
+            *k,
+            FindingKind::GooseGuardBroken
+                | FindingKind::GooseGuardMissing
+                | FindingKind::GooseSessionGuardMissing
+        )),
+        "a fully wired goose stack should be clean: {report:#?}",
+    );
+}
+
+/// A project-scope backstop satisfies the check on its own.
+#[test]
+fn goose_project_scope_session_entry_satisfies_the_check() {
+    let system = goose_mock(&[
+        ("/opt/bin/remargin", "binary"),
+        ("/home/u/.agents/marker", "x"),
+        (
+            "/r/.agents/plugins/remargin-guard/hooks/hooks.json",
+            &goose_hooks_json_with_session("/opt/bin/remargin"),
+        ),
+    ]);
+    let report = run_goose_doctor(&system);
+    assert!(
+        !kinds(&report).contains(&FindingKind::GooseSessionGuardMissing),
+        "project-scope backstop should be clean: {report:#?}",
+    );
+}
+
+/// A backstop whose binary is gone is named in the finding, not silently
+/// folded into a plain absence.
+#[test]
+fn goose_session_entry_pointing_at_a_missing_binary_names_the_fault() {
+    let system = goose_mock(&[(
+        "/home/u/.agents/plugins/remargin-guard/hooks/hooks.json",
+        &goose_hooks_json_with_session("/opt/bin/remargin"),
+    )]);
+    let report = run_goose_doctor(&system);
+    let finding = report
+        .findings
+        .iter()
+        .find(|f| f.kind == FindingKind::GooseSessionGuardMissing)
+        .unwrap();
+    assert!(
+        finding.message.contains("/opt/bin/remargin"),
+        "message should name the missing binary: {finding:#?}",
+    );
+}
+
+/// The backstop check carries its own slug, so it selects and deselects
+/// independently of the plugin check.
+#[test]
+fn goose_session_guard_check_is_selectable_by_slug() {
+    let system = goose_mock(&[
+        ("/opt/bin/remargin", "binary"),
+        (
+            "/home/u/.agents/plugins/remargin-guard/hooks/hooks.json",
+            &goose_hooks_json("/opt/bin/remargin goose pretool"),
+        ),
+    ]);
+
+    let selected = CheckName::parse_set("goose-session-guard").unwrap();
+    assert!(selected.contains(&CheckName::GooseSessionGuard));
+    let report = super::run_doctor(
+        &system,
+        Path::new("/r"),
+        Path::new("/home/u/.claude/settings.json"),
+        &selected,
+    )
+    .unwrap();
+    assert_eq!(kinds(&report), vec![FindingKind::GooseSessionGuardMissing]);
+
+    let other = CheckName::parse_set("goose-guard").unwrap();
+    let deselected = super::run_doctor(
+        &system,
+        Path::new("/r"),
+        Path::new("/home/u/.claude/settings.json"),
+        &other,
+    )
+    .unwrap();
+    assert!(
+        !kinds(&deselected).contains(&FindingKind::GooseSessionGuardMissing),
         "deselected check must not report: {deselected:#?}",
     );
 }

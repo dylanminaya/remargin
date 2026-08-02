@@ -1518,6 +1518,20 @@ pub enum GooseAction {
         #[command(flatten)]
         output_args: OutputArgs,
     },
+    /// goose `SessionStart` guard surface — the fail-open backstop.
+    ///
+    /// With no subcommand (or `dispatch`), re-verifies that the
+    /// `PreToolUse` guard will actually run for this session and prints a
+    /// diagnostic on stdout when it will not. `SessionStart` cannot block
+    /// in goose, so the guard reports; it never stops a session.
+    /// `install` / `uninstall` / `test` manage the `SessionStart` entry in
+    /// the shared guard plugin.
+    SessionGuard {
+        #[command(subcommand)]
+        action: Option<GooseSessionGuardAction>,
+        #[command(flatten)]
+        output_args: OutputArgs,
+    },
 }
 
 /// `remargin goose pretool` subcommands.
@@ -1537,6 +1551,30 @@ pub enum GoosePretoolAction {
         local: bool,
     },
     /// Remove the guard plugin directory. Preserves sibling plugins.
+    Uninstall {
+        #[arg(long)]
+        local: bool,
+    },
+}
+
+/// `remargin goose session-guard` subcommands.
+#[derive(clap::Subcommand)]
+pub enum GooseSessionGuardAction {
+    /// Re-verify the guard stack and print the diagnostic when it is broken.
+    Dispatch,
+    /// Add the `SessionStart` entry to `~/.agents/plugins/remargin-guard`
+    /// (default) or `.agents/plugins/remargin-guard` with `--local`,
+    /// creating the plugin when it is not there yet.
+    Install {
+        #[arg(long)]
+        local: bool,
+    },
+    /// Report whether the `SessionStart` entry is wired.
+    Test {
+        #[arg(long)]
+        local: bool,
+    },
+    /// Remove the `SessionStart` entry. Preserves the `PreToolUse` entry.
     Uninstall {
         #[arg(long)]
         local: bool,

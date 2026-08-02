@@ -70,6 +70,13 @@ pub enum FindingKind {
     /// both the user-scope and project-scope plugin roots. goose sessions
     /// can shell and edit remargin-managed paths with no guard.
     GooseGuardMissing,
+    /// goose is installed but the guard plugin declares no live
+    /// `SessionStart` entry (`remargin goose session-guard`) in either
+    /// scope. goose fails open on a hook it cannot run, so a `PreToolUse`
+    /// guard that breaks — its binary moved, its manifest corrupted — is
+    /// indistinguishable from a live one from inside a session. The
+    /// `SessionStart` entry is the backstop that says so out loud.
+    GooseSessionGuardMissing,
     /// The `PreToolUse` hook (`remargin claude pretool`) is absent from
     /// both user-scope and project-scope settings files. No CLI or
     /// native-tool enforcement is active for any managed path in the
@@ -186,6 +193,9 @@ pub enum CheckName {
     ConfigSchemaLint,
     /// The goose guard plugin, when a goose installation is present.
     GooseGuard,
+    /// The goose `SessionStart` backstop, when a goose installation is
+    /// present.
+    GooseSessionGuard,
     /// The `PreToolUse` enforcement hook — always gates the run.
     Hook,
     /// Strict-mode signing-key resolution and agent-key-under-`~/.ssh`.
@@ -206,9 +216,10 @@ impl CheckName {
     /// Every check, in a stable order. Single source of truth for
     /// [`all`](Self::all), [`from_slug`](Self::from_slug), and
     /// [`valid_slugs`](Self::valid_slugs).
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::ConfigSchemaLint,
         Self::GooseGuard,
+        Self::GooseSessionGuard,
         Self::Hook,
         Self::IdentityKey,
         Self::LeftoverRules,
@@ -259,6 +270,7 @@ impl CheckName {
         match self {
             Self::ConfigSchemaLint => "config-schema-lint",
             Self::GooseGuard => "goose-guard",
+            Self::GooseSessionGuard => "goose-session-guard",
             Self::Hook => "hook",
             Self::IdentityKey => "identity-key",
             Self::LeftoverRules => "leftover-rules",
@@ -369,6 +381,10 @@ pub fn run_doctor(
 
     if checks.contains(&CheckName::GooseGuard) {
         findings.extend(goose_guard_findings(system, cwd)?);
+    }
+
+    if checks.contains(&CheckName::GooseSessionGuard) {
+        findings.extend(goose_session_guard_findings(system, cwd)?);
     }
 
     // Lint containment before resolving: an out-of-realm entry makes
@@ -539,6 +555,78 @@ fn goose_guard_findings(system: &dyn System, cwd: &Path) -> Result<Vec<DoctorFin
         }
     }
     Ok(vec![goose_guard_missing_finding(&user_dir, &project_dir)])
+}
+
+/// Findings for the goose `SessionStart` backstop.
+///
+/// Gated on a goose installation the same way [`goose_guard_findings`] is,
+/// and satisfied by either plugin scope. A `Broken` verdict contributes its
+/// fault to the message rather than a second finding: the entry is not live
+/// either way, and one repair — reinstalling it — covers both.
+fn goose_session_guard_findings(system: &dyn System, cwd: &Path) -> Result<Vec<DoctorFinding>> {
+    let Ok(home_var) = system.env_var("HOME") else {
+        return Ok(Vec::new());
+    };
+    let home = PathBuf::from(home_var);
+    if !system.exists(&goose_install::agents_dir(&home))? {
+        return Ok(Vec::new());
+    }
+
+    let user_dir = goose_install::plugin_dir(&home);
+    let project_dir = goose_install::plugin_dir(cwd);
+    let outcomes = [
+        goose_install::test_session_guard(system, &user_dir)?,
+        goose_install::test_session_guard(system, &project_dir)?,
+    ];
+    if outcomes
+        .iter()
+        .any(|outcome| matches!(*outcome, GooseTestOutcome::Installed))
+    {
+        return Ok(Vec::new());
+    }
+    let fault = outcomes.iter().find_map(|outcome| {
+        if let GooseTestOutcome::Broken(reason) = outcome {
+            Some(reason.as_str())
+        } else {
+            None
+        }
+    });
+    Ok(vec![goose_session_guard_missing_finding(
+        &user_dir,
+        &project_dir,
+        fault,
+    )])
+}
+
+fn goose_session_guard_missing_finding(
+    user_dir: &Path,
+    project_dir: &Path,
+    fault: Option<&str>,
+) -> DoctorFinding {
+    let detail = fault.map_or_else(
+        || {
+            format!(
+                "it is absent from both the user-scope plugin root ({}) and the project-scope one \
+                 ({})",
+                user_dir.display(),
+                project_dir.display(),
+            )
+        },
+        |reason| format!("it is not live: {reason}"),
+    );
+    DoctorFinding {
+        kind: FindingKind::GooseSessionGuardMissing,
+        message: format!(
+            "goose is installed but the remargin guard plugin declares no live SessionStart entry \
+             (`remargin goose session-guard`) — {detail}. goose fails open on a hook it cannot \
+             run, so a PreToolUse guard that breaks leaves the session unguarded with no signal; \
+             the SessionStart entry is the backstop that reports it.",
+        ),
+        remedy: String::from(
+            "Run `remargin goose session-guard install` to register the SessionStart entry.",
+        ),
+        severity: Severity::Critical,
+    }
 }
 
 fn goose_guard_missing_finding(user_dir: &Path, project_dir: &Path) -> DoctorFinding {

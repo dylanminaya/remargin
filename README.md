@@ -366,7 +366,17 @@ goose discovers plugins by their presence on disk, so `install` is the whole reg
 
 The guard is fail-closed throughout, which is the opposite of the platform it runs on: goose lets a tool call through when a hook crashes, times out, or prints nothing. So every path that cannot reach a confident allow — an unparseable envelope, a gated tool that does not say what it would touch, an internal resolve failure — blocks, and every block fires on both channels goose accepts (the decision object on stdout, the reason on stderr, exit 2).
 
-`remargin doctor` reports the goose stack too: when goose is installed (`~/.agents` exists) but the guard plugin is missing or broken, it raises a critical finding naming the repair. Run just that check with `remargin doctor --check=goose-guard`.
+That fail-open platform is also why the guard ships with a backstop. `remargin goose session-guard` adds a `SessionStart` entry to the same plugin that re-checks, once per session, that the `PreToolUse` guard will actually run — its manifest parses, it declares the entry, and the absolute binary that entry names is still on disk — and that the realm's `.remargin.yaml` still parses:
+
+```bash
+remargin goose session-guard install    # adds the SessionStart entry (creates the plugin if needed)
+remargin goose session-guard test       # installed / not_installed / broken
+remargin goose session-guard uninstall  # removes only that entry; the PreToolUse entry survives
+```
+
+goose gives `SessionStart` no blocking decision, so the backstop is **diagnostic-only**: a healthy stack is silent, and a broken one prints an unmissable diagnostic on stdout naming the specific breakage. It exits 0 either way — a non-zero exit is a hook failure goose swallows, and the diagnostic would go with it. It cannot stop a session; it makes a session that only *looks* guarded say so.
+
+`remargin doctor` reports the goose stack too: when goose is installed (`~/.agents` exists) but the guard plugin is missing or broken, it raises a critical finding naming the repair, and a second one when the plugin carries no live `SessionStart` backstop. Run just those checks with `remargin doctor --check=goose-guard` and `--check=goose-session-guard`.
 
 ### Permissions (optional)
 
@@ -907,6 +917,9 @@ Returns a projection of any mutating op (`ack`, `batch`, `comment`, `cp`, `delet
 | `goose pretool install [--local]` | Write the goose guard plugin to `~/.agents/plugins/remargin-guard` (or the project scope) |
 | `goose pretool uninstall [--local]` | Remove the goose guard plugin, preserving sibling plugins |
 | `goose pretool test [--local]` | Report whether the goose guard plugin is wired, absent, or broken |
+| `goose session-guard install [--local]` | Add the `SessionStart` backstop entry to the goose guard plugin |
+| `goose session-guard uninstall [--local]` | Remove the `SessionStart` entry, preserving the `PreToolUse` one |
+| `goose session-guard test [--local]` | Report whether the `SessionStart` entry is wired |
 | `doctor` | Check realm health: hooks wired (Claude and goose), config schema across the realm tree, identity/key resolvability, trusted-root existence, sandbox staging hygiene, project-scope settings. `--check=<set>` runs a named subset of checks |
 | `claude restrict` | Add permission rules (sync to `.claude/settings.local.json` and `~/.claude/settings.json`) |
 | `claude unrestrict` | Reverse a previous `restrict` cleanly |

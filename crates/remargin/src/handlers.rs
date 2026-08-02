@@ -86,6 +86,13 @@ use remargin_core::session::multiplexer::{
 use remargin_core::session::spec::build_launch_spec;
 use remargin_core::writer::InsertPosition;
 
+/// Status label for the goose lifecycle commands, so a `PreToolUse`
+/// verdict and a `SessionStart` verdict over the same plugin directory are
+/// not read for each other.
+const GOOSE_PLUGIN_SUBJECT: &str = "goose guard plugin";
+
+const GOOSE_SESSION_SUBJECT: &str = "goose SessionStart guard";
+
 const fn author_type_str(at: &parser::AuthorType) -> &'static str {
     at.as_str()
 }
@@ -231,7 +238,15 @@ pub fn cmd_goose_pretool_install(
         goose_install::InstallOutcome::Installed => "installed",
         _ => "unknown",
     };
-    emit_goose_status(sinks, json_mode, scope_label(local), status, None, &path)
+    emit_goose_status(
+        sinks,
+        json_mode,
+        GOOSE_PLUGIN_SUBJECT,
+        scope_label(local),
+        status,
+        None,
+        &path,
+    )
 }
 
 pub fn cmd_goose_pretool_uninstall(
@@ -248,7 +263,15 @@ pub fn cmd_goose_pretool_uninstall(
         goose_install::UninstallOutcome::Uninstalled => "uninstalled",
         _ => "unknown",
     };
-    emit_goose_status(sinks, json_mode, scope_label(local), status, None, &path)
+    emit_goose_status(
+        sinks,
+        json_mode,
+        GOOSE_PLUGIN_SUBJECT,
+        scope_label(local),
+        status,
+        None,
+        &path,
+    )
 }
 
 pub fn cmd_goose_pretool_test(
@@ -260,15 +283,11 @@ pub fn cmd_goose_pretool_test(
     let cwd = env::current_dir().context("resolving current directory")?;
     let path = goose_plugin_dir(system, &cwd, local)?;
     let outcome = goose_install::test(system, &path)?;
-    let (status, detail) = match outcome {
-        goose_install::TestOutcome::Broken(reason) => ("broken", Some(reason)),
-        goose_install::TestOutcome::Installed => ("installed", None),
-        goose_install::TestOutcome::NotInstalled => ("not_installed", None),
-        _ => ("unknown", None),
-    };
+    let (status, detail) = goose_test_status(outcome);
     emit_goose_status(
         sinks,
         json_mode,
+        GOOSE_PLUGIN_SUBJECT,
         scope_label(local),
         status,
         detail.as_deref(),
@@ -276,12 +295,94 @@ pub fn cmd_goose_pretool_test(
     )
 }
 
-/// Shared status render for the goose plugin lifecycle. `detail` carries
-/// the specific fault behind a `broken` verdict; every other status has
-/// none.
+pub fn cmd_goose_session_guard_install(
+    sinks: &mut IoSinks<'_>,
+    system: &dyn System,
+    local: bool,
+    json_mode: bool,
+) -> Result<()> {
+    let cwd = env::current_dir().context("resolving current directory")?;
+    let path = goose_plugin_dir(system, &cwd, local)?;
+    let outcome = goose_install::install_session_guard(system, &path)?;
+    let status = match outcome {
+        goose_install::InstallOutcome::AlreadyInstalled => "already_installed",
+        goose_install::InstallOutcome::Installed => "installed",
+        _ => "unknown",
+    };
+    emit_goose_status(
+        sinks,
+        json_mode,
+        GOOSE_SESSION_SUBJECT,
+        scope_label(local),
+        status,
+        None,
+        &path,
+    )
+}
+
+pub fn cmd_goose_session_guard_test(
+    sinks: &mut IoSinks<'_>,
+    system: &dyn System,
+    local: bool,
+    json_mode: bool,
+) -> Result<()> {
+    let cwd = env::current_dir().context("resolving current directory")?;
+    let path = goose_plugin_dir(system, &cwd, local)?;
+    let outcome = goose_install::test_session_guard(system, &path)?;
+    let (status, detail) = goose_test_status(outcome);
+    emit_goose_status(
+        sinks,
+        json_mode,
+        GOOSE_SESSION_SUBJECT,
+        scope_label(local),
+        status,
+        detail.as_deref(),
+        &path,
+    )
+}
+
+pub fn cmd_goose_session_guard_uninstall(
+    sinks: &mut IoSinks<'_>,
+    system: &dyn System,
+    local: bool,
+    json_mode: bool,
+) -> Result<()> {
+    let cwd = env::current_dir().context("resolving current directory")?;
+    let path = goose_plugin_dir(system, &cwd, local)?;
+    let outcome = goose_install::uninstall_session_guard(system, &path)?;
+    let status = match outcome {
+        goose_install::UninstallOutcome::NotInstalled => "not_installed",
+        goose_install::UninstallOutcome::Uninstalled => "uninstalled",
+        _ => "unknown",
+    };
+    emit_goose_status(
+        sinks,
+        json_mode,
+        GOOSE_SESSION_SUBJECT,
+        scope_label(local),
+        status,
+        None,
+        &path,
+    )
+}
+
+fn goose_test_status(outcome: goose_install::TestOutcome) -> (&'static str, Option<String>) {
+    match outcome {
+        goose_install::TestOutcome::Broken(reason) => ("broken", Some(reason)),
+        goose_install::TestOutcome::Installed => ("installed", None),
+        goose_install::TestOutcome::NotInstalled => ("not_installed", None),
+        _ => ("unknown", None),
+    }
+}
+
+/// Shared status render for the goose plugin lifecycle. `subject` names
+/// which entry the verdict is about — both families report over the same
+/// plugin directory. `detail` carries the specific fault behind a `broken`
+/// verdict; every other status has none.
 fn emit_goose_status(
     sinks: &mut IoSinks<'_>,
     json_mode: bool,
+    subject: &str,
     scope: &str,
     status: &str,
     detail: Option<&str>,
@@ -302,7 +403,7 @@ fn emit_goose_status(
         let suffix = detail.map_or_else(String::new, |reason| format!(" ({reason})"));
         writeln!(
             sinks.stderr,
-            "goose guard plugin ({scope}): {status} at {}{suffix}",
+            "{subject} ({scope}): {status} at {}{suffix}",
             path.display(),
         )
         .context("writing to stderr")?;
