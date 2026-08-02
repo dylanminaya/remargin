@@ -3,13 +3,14 @@
 //! asserts the resulting `PretoolOutcome`. The core function is pure
 //! so the binary never spawns.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use os_shim::mock::MockSystem;
 use serde_json::{Value, json};
 
 use crate::permissions::pretool::{
-    Decision, DecisionInner, PermissionDecision, PretoolOutcome, pretool,
+    Decision, DecisionInner, PermissionDecision, PretoolOutcome, ToolPrefix, ToolTarget, decide,
+    pretool,
 };
 
 fn mock_with(files: &[(&str, &str)]) -> MockSystem {
@@ -2051,4 +2052,108 @@ fn in_realm_cwd_regression_guards_unchanged() {
         pretool(&system, &cd_stdin),
         PretoolOutcome::Deny(_)
     ));
+}
+
+// ---------------------------------------------------------------------
+// Host tool prefix: one registry, rendered per host
+// ---------------------------------------------------------------------
+
+fn reason_under(system: &MockSystem, target: &ToolTarget, cwd: &str, prefix: ToolPrefix) -> String {
+    let decision = expect_deny(decide(system, target, Path::new(cwd), prefix));
+    deny_reason(&decision).to_owned()
+}
+
+/// Renders one deny under both hosts and pins the only sanctioned
+/// difference: substituting the tool prefix in the Claude render must
+/// reproduce the goose render exactly. Wording that drifted per host, or a
+/// message that hard-coded a prefix instead of taking the parameter, fails
+/// here.
+fn assert_hosts_differ_only_by_prefix(system: &MockSystem, target: &ToolTarget, cwd: &str) {
+    let claude = reason_under(system, target, cwd, ToolPrefix::CLAUDE);
+    let goose = reason_under(system, target, cwd, ToolPrefix::GOOSE);
+    assert_eq!(
+        claude.replace(ToolPrefix::CLAUDE.as_str(), ToolPrefix::GOOSE.as_str()),
+        goose,
+        "host renders diverge beyond the prefix\nclaude: {claude}\ngoose:  {goose}",
+    );
+    assert!(
+        !goose.contains(ToolPrefix::CLAUDE.as_str()),
+        "goose render carries Claude Code's tool prefix: {goose}",
+    );
+}
+
+fn path_target(path: &str, tool_name: &str) -> ToolTarget {
+    ToolTarget::Path {
+        path: PathBuf::from(path),
+        tool_name: String::from(tool_name),
+    }
+}
+
+fn bash_target(command: &str) -> ToolTarget {
+    ToolTarget::BashCommand {
+        command: String::from(command),
+    }
+}
+
+/// Every per-tool deny message renders per host off the one registry.
+#[test]
+fn per_tool_messages_render_per_host() {
+    let system = mock_with(&[("/r/.remargin.yaml", &restrict_yaml("secret"))]);
+    for tool in [
+        "Read",
+        "Write",
+        "Edit",
+        "MultiEdit",
+        "NotebookEdit",
+        "Grep",
+        "Glob",
+        "SomeUnknownTool",
+    ] {
+        assert_hosts_differ_only_by_prefix(&system, &path_target("/r/secret/foo.md", tool), "/r");
+    }
+}
+
+/// Every verb in the shell guidance vocabulary renders per host, plus a
+/// verb outside it so the no-equivalent fallback is covered too.
+#[test]
+fn shell_verb_guidance_renders_per_host() {
+    let system = mock_with(&[("/r/.remargin.yaml", &restrict_yaml("secret"))]);
+    for verb in [
+        "sed", "awk", "cat", "less", "more", "head", "tail", "grep", "rg", "ag", "find", "ls",
+        "mv", "rm", "cp", "tee", "dd", "vim", "nvim", "nano", "code", "git", "make",
+    ] {
+        let target = bash_target(&format!("{verb} /r/secret/foo.md"));
+        assert_hosts_differ_only_by_prefix(&system, &target, "/tmp");
+    }
+}
+
+/// The three whole-command denies — in-realm cwd, ancestor-destructive, and
+/// the `cli_allowed` policy deny — each build their own string and so each
+/// needs the prefix threaded independently.
+#[test]
+fn whole_command_denies_render_per_host() {
+    let system = mock_with(&[("/r/.remargin.yaml", &restrict_yaml("secret"))]);
+    assert_hosts_differ_only_by_prefix(&system, &bash_target("ls"), "/r/secret");
+    assert_hosts_differ_only_by_prefix(&system, &bash_target("rm -rf /r"), "/tmp");
+
+    let cli_denied = mock_with(&[("/r/.remargin.yaml", "permissions:\n  cli_allowed: false\n")]);
+    assert_hosts_differ_only_by_prefix(&cli_denied, &bash_target("remargin write /r/x.md"), "/r");
+}
+
+/// The Claude render is the byte-identical default: `pretool` must produce
+/// exactly what `decide` produces under the Claude prefix.
+#[test]
+fn claude_entry_point_renders_the_claude_prefix() {
+    let system = mock_with(&[("/r/.remargin.yaml", &restrict_yaml("secret"))]);
+    let stdin = event_json("Read", "/r", &json!({ "file_path": "/r/secret/foo.md" }));
+    let through_hook = expect_deny(pretool(&system, &stdin));
+    assert_eq!(
+        deny_reason(&through_hook),
+        reason_under(
+            &system,
+            &path_target("/r/secret/foo.md", "Read"),
+            "/r",
+            ToolPrefix::CLAUDE,
+        ),
+    );
 }

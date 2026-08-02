@@ -376,7 +376,7 @@ remargin goose session-guard uninstall  # removes only that entry; the PreToolUs
 
 goose gives `SessionStart` no blocking decision, so the backstop is **diagnostic-only**: a healthy stack is silent, and a broken one prints an unmissable diagnostic on stdout naming the specific breakage. It exits 0 either way — a non-zero exit is a hook failure goose swallows, and the diagnostic would go with it. It cannot stop a session; it makes a session that only *looks* guarded say so.
 
-Blocking is only half a redirect. The guard's deny message names the remargin ops to use instead, and a goose session only has those ops once remargin is registered as a goose MCP extension — otherwise every block names tools that are not there. `remargin goose mcp` writes that entry:
+Blocking is only half a redirect. The guard's deny message names the remargin ops to use instead, spelled the way the receiving host exposes them — a goose block says `remargin__write`, the Claude hook says `mcp__remargin__write`, and the wording is otherwise identical because both render the one guidance registry. And a goose session only has those ops once remargin is registered as a goose MCP extension — otherwise every block names tools that are not there. `remargin goose mcp` writes that entry:
 
 ```sh
 remargin goose mcp install    # registers remargin's stdio server in goose's config.yaml

@@ -117,8 +117,14 @@ fn block_fires_on_stdout_stderr_and_exit_two() {
     assert_eq!(decision["decision"], Value::from("block"));
     let reason = decision["reason"].as_str().unwrap();
     assert!(
-        reason.contains("mcp__remargin__write"),
+        reason.contains("remargin__write"),
         "reason should name the remargin op: {reason}",
+    );
+    // goose exposes the op as `remargin__write`; Claude Code's
+    // `mcp__remargin__*` names nothing this session can call.
+    assert!(
+        !reason.contains("mcp__remargin__"),
+        "reason should carry goose's tool namespacing: {reason}",
     );
     assert!(
         stderr_of(&out).contains(reason),

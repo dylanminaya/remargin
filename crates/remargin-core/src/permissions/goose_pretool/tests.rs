@@ -13,6 +13,7 @@ use os_shim::mock::MockSystem;
 use serde_json::{Value, json};
 
 use crate::permissions::goose_pretool::{BlockDecision, GooseVerdict, goose_pretool};
+use crate::permissions::pretool::ToolPrefix;
 
 fn mock_with(files: &[(&str, &str)]) -> MockSystem {
     let mut system = MockSystem::new();
@@ -57,6 +58,22 @@ fn assert_allow(verdict: &GooseVerdict) {
     assert_eq!(verdict, &GooseVerdict::Allow, "expected Allow");
 }
 
+/// A goose session reaches remargin's ops as `remargin__*` and has no tool
+/// named `mcp__remargin__*` at all, so a reason spelling the op Claude
+/// Code's way names something uncallable — the retry loop the guidance
+/// exists to end. Asserting the absence is the load-bearing half: the goose
+/// prefix is a substring of Claude's.
+fn assert_goose_namespaced(reason: &str) {
+    assert!(
+        reason.contains(ToolPrefix::GOOSE.as_str()),
+        "reason names no remargin op: {reason}",
+    );
+    assert!(
+        !reason.contains(ToolPrefix::CLAUDE.as_str()),
+        "reason carries Claude Code's tool prefix: {reason}",
+    );
+}
+
 // ---- 1. managed path via the text editor -------------------------------
 
 /// A `write` onto a managed path blocks and the reason names the remargin
@@ -69,8 +86,9 @@ fn text_editor_write_on_managed_path_blocks_with_write_guidance() {
         &json!({ "command": "write", "path": "/r/secret/foo.md", "file_text": "x" }),
     );
     let reason = expect_block(goose_pretool(&realm(), &stdin));
-    assert!(reason.contains("mcp__remargin__write"), "reason: {reason}");
+    assert!(reason.contains("remargin__write"), "reason: {reason}");
     assert!(reason.contains("/r/secret/foo.md"), "reason: {reason}");
+    assert_goose_namespaced(&reason);
 }
 
 /// `str_replace` and `insert` are edit-class verbs, so they redirect to the
@@ -85,9 +103,10 @@ fn text_editor_str_replace_and_insert_block_with_edit_guidance() {
         );
         let reason = expect_block(goose_pretool(&realm(), &stdin));
         assert!(
-            reason.contains("mcp__remargin__edit"),
+            reason.contains("remargin__edit"),
             "{command} reason: {reason}",
         );
+        assert_goose_namespaced(&reason);
     }
 }
 
@@ -100,7 +119,8 @@ fn text_editor_view_on_managed_path_blocks_with_get_guidance() {
         &json!({ "command": "view", "path": "/r/secret/foo.md" }),
     );
     let reason = expect_block(goose_pretool(&realm(), &stdin));
-    assert!(reason.contains("mcp__remargin__get"), "reason: {reason}");
+    assert!(reason.contains("remargin__get"), "reason: {reason}");
+    assert_goose_namespaced(&reason);
 }
 
 /// A relative path is rooted at `working_dir`, so the realm is found even
@@ -128,7 +148,8 @@ fn shell_word_inside_managed_subtree_blocks() {
         &json!({ "command": "cat /r/secret/foo.md" }),
     );
     let reason = expect_block(goose_pretool(&realm(), &stdin));
-    assert!(reason.contains("mcp__remargin__get"), "reason: {reason}");
+    assert!(reason.contains("remargin__get"), "reason: {reason}");
+    assert_goose_namespaced(&reason);
 }
 
 /// The second route into the same block: an in-realm `working_dir`, where a
@@ -269,7 +290,51 @@ fn ungated_tool_without_a_gated_shape_allows() {
     assert_allow(&goose_pretool(&realm(), &stdin));
 }
 
-// ---- 6. verdict payload shape ------------------------------------------
+// ---- 6. host tool namespacing ------------------------------------------
+
+/// Every deny family reachable from goose renders its op names in goose's
+/// namespacing. Walks the families one by one — the per-tool message, the
+/// per-verb shell redirect, the in-realm-cwd deny, the ancestor-destructive
+/// deny, and the `cli_allowed` deny — because each builds its own string
+/// off the shared registry and a missed one would still hand the agent a
+/// tool it cannot call.
+#[test]
+fn every_deny_family_names_goose_namespaced_ops() {
+    let system = realm();
+    let cases = [
+        event_json(
+            "developer__text_editor",
+            "/r",
+            &json!({ "command": "write", "path": "/r/secret/foo.md" }),
+        ),
+        event_json(
+            "developer__shell",
+            "/tmp",
+            &json!({ "command": "cat /r/secret/foo.md" }),
+        ),
+        event_json("developer__shell", "/r/secret", &json!({ "command": "ls" })),
+        event_json(
+            "developer__shell",
+            "/tmp",
+            &json!({ "command": "rm -rf /r/secret" }),
+        ),
+    ];
+    for stdin in &cases {
+        assert_goose_namespaced(&expect_block(goose_pretool(&system, stdin)));
+    }
+
+    let cli_denied = mock_with(&[("/r/.remargin.yaml", "permissions:\n  cli_allowed: false\n")]);
+    let stdin = event_json(
+        "developer__shell",
+        "/r",
+        &json!({ "command": "remargin write /r/x.md" }),
+    );
+    let reason = expect_block(goose_pretool(&cli_denied, &stdin));
+    assert!(reason.contains("cli_allowed: false"), "reason: {reason}");
+    assert_goose_namespaced(&reason);
+}
+
+// ---- 7. verdict payload shape ------------------------------------------
 
 /// The stdout channel carries goose's documented block object verbatim.
 #[test]

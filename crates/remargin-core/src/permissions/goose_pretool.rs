@@ -12,6 +12,12 @@
 //! `tool_input.file_path`, and folds the editing verb into
 //! `tool_input.command`.
 //!
+//! The namespacing runs both ways: a deny message points the agent at a
+//! remargin op, so [`decide`] renders those op names with
+//! [`ToolPrefix::GOOSE`] — a goose session has no `mcp__remargin__*` tool
+//! to call, and an unfollowable redirect is the retry loop the guidance
+//! exists to end.
+//!
 //! Fail-closed by construction. goose treats a hook that crashes, times
 //! out, or prints nothing as permission to proceed, so every path that
 //! cannot reach a confident allow — an unparseable envelope, a gated tool
@@ -31,7 +37,7 @@ use os_shim::System;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::permissions::pretool::{PretoolOutcome, ToolTarget, decide};
+use crate::permissions::pretool::{PretoolOutcome, ToolPrefix, ToolTarget, decide};
 
 /// goose's builtin file-editing tool. Its `tool_input.command` carries the
 /// editing verb, which selects the Claude-side tool class the engine's
@@ -45,7 +51,7 @@ const TOOL_SHELL: &str = "developer__shell";
 /// Tool-name prefixes identifying remargin's own MCP extension. goose
 /// namespaces a tool as `<extension>__<tool>`; a host that re-prefixes MCP
 /// extensions yields the second form.
-const REMARGIN_TOOL_PREFIXES: &[&str] = &["remargin__", "mcp__remargin__"];
+const REMARGIN_TOOL_PREFIXES: &[&str] = &[ToolPrefix::GOOSE.as_str(), ToolPrefix::CLAUDE.as_str()];
 
 /// Input keys naming a filesystem path on a tool outside the gated set.
 const UNGATED_PATH_KEYS: &[&str] = &["path", "file_path"];
@@ -121,7 +127,7 @@ pub fn goose_pretool(system: &dyn System, stdin_bytes: &[u8]) -> GooseVerdict {
         ));
     };
 
-    verdict_for(decide(system, &target, cwd))
+    verdict_for(decide(system, &target, cwd, ToolPrefix::GOOSE))
 }
 
 fn blocked(reason: &str) -> GooseVerdict {

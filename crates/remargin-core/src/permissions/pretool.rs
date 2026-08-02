@@ -14,7 +14,7 @@
 #[cfg(test)]
 mod tests;
 
-use core::mem;
+use core::{fmt, mem};
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf, is_separator};
 
@@ -48,6 +48,35 @@ const WRAPPER_PREFIXES: &[WrapperPrefix] = &[WrapperPrefix {
 struct WrapperPrefix {
     has_proxy_subcommand: bool,
     name: &'static str,
+}
+
+/// The namespace a host puts in front of remargin's MCP tool names.
+///
+/// A deny message names the remargin op to call instead, so it has to
+/// spell that op the way the *receiving* host exposes it or the redirect
+/// is not callable there. Hosts disagree: Claude Code re-prefixes MCP
+/// extensions, goose namespaces by the extension's own `name` alone. This
+/// is a render parameter on the one guidance registry, never a second
+/// registry — every message keeps identical wording apart from the prefix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToolPrefix(&'static str);
+
+impl ToolPrefix {
+    /// Claude Code's namespacing: `mcp__remargin__get`.
+    pub const CLAUDE: Self = Self("mcp__remargin__");
+    /// goose's namespacing: `remargin__get`.
+    pub const GOOSE: Self = Self("remargin__");
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+impl fmt::Display for ToolPrefix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0)
+    }
 }
 
 /// Decision JSON shape Claude Code expects on stdout.
@@ -143,13 +172,21 @@ pub fn pretool(system: &dyn System, stdin_bytes: &[u8]) -> PretoolOutcome {
         Err(reason) => return PretoolOutcome::Fail(reason),
     };
 
-    decide(system, &target, &event.cwd)
+    decide(system, &target, &event.cwd, ToolPrefix::CLAUDE)
 }
 
 /// Resolve `target` against the realm that governs it, from a session
 /// rooted at `cwd`. The single decision path shared by every host adapter.
+///
+/// `tool_prefix` only renders the remargin op names inside deny messages;
+/// it cannot change what is denied.
 #[must_use]
-pub fn decide(system: &dyn System, target: &ToolTarget, cwd: &Path) -> PretoolOutcome {
+pub fn decide(
+    system: &dyn System,
+    target: &ToolTarget,
+    cwd: &Path,
+    tool_prefix: ToolPrefix,
+) -> PretoolOutcome {
     match target {
         ToolTarget::NoCheck => PretoolOutcome::SilentAllow,
         ToolTarget::Path { tool_name, path } => {
@@ -164,7 +201,7 @@ pub fn decide(system: &dyn System, target: &ToolTarget, cwd: &Path) -> PretoolOu
                 }
             };
             if path_is_restricted(&resolved, &canonical) {
-                return PretoolOutcome::Deny(build_decision(tool_name, &canonical));
+                return PretoolOutcome::Deny(build_decision(tool_name, &canonical, tool_prefix));
             }
             // Grep / Glob search a subtree recursively, so a search root at or
             // above a trusted root sweeps the protected subtree even though the
@@ -173,7 +210,11 @@ pub fn decide(system: &dyn System, target: &ToolTarget, cwd: &Path) -> PretoolOu
             if is_search_tool(tool_name) {
                 match matching_trusted_root_ancestor(system, &canonical) {
                     Ok(Some(_)) => {
-                        return PretoolOutcome::Deny(build_decision(tool_name, &canonical));
+                        return PretoolOutcome::Deny(build_decision(
+                            tool_name,
+                            &canonical,
+                            tool_prefix,
+                        ));
                     }
                     Ok(None) => {}
                     Err(err) => {
@@ -192,7 +233,7 @@ pub fn decide(system: &dyn System, target: &ToolTarget, cwd: &Path) -> PretoolOu
                     return PretoolOutcome::Fail(format!("permissions resolve failed: {err}"));
                 }
             };
-            bash_decision(system, policy.cli_allowed(), command, cwd)
+            bash_decision(system, policy.cli_allowed(), command, cwd, tool_prefix)
         }
     }
 }
@@ -419,13 +460,14 @@ fn bash_decision(
     cli_allowed: bool,
     command: &str,
     event_cwd: &Path,
+    tool_prefix: ToolPrefix,
 ) -> PretoolOutcome {
     let commands = split_into_simple_commands(command);
 
     // Folder-level CLI policy: deny any `remargin` CLI invocation when
     // the effective policy is false (nearest-wins, default = allowed).
     if !cli_allowed && first_verb_is_remargin(&commands) {
-        return PretoolOutcome::Deny(build_cli_denied_decision());
+        return PretoolOutcome::Deny(build_cli_denied_decision(tool_prefix));
     }
 
     // From an in-realm cwd, bare relative words carry no path evidence and
@@ -448,13 +490,16 @@ fn bash_decision(
             &canonical_cwd,
             &realm_root,
             &commands,
+            tool_prefix,
         ));
     }
 
     let mut cwd = event_cwd.to_path_buf();
     let mut cd_active = false;
     for tokens in &commands {
-        if let Some(outcome) = evaluate_simple_command(system, tokens, &mut cwd, &mut cd_active) {
+        if let Some(outcome) =
+            evaluate_simple_command(system, tokens, &mut cwd, &mut cd_active, tool_prefix)
+        {
             return outcome;
         }
     }
@@ -474,6 +519,7 @@ fn evaluate_simple_command(
     tokens: &[String],
     cwd: &mut PathBuf,
     cd_active: &mut bool,
+    tool_prefix: ToolPrefix,
 ) -> Option<PretoolOutcome> {
     let verb_info = command_verb(tokens);
     let verb = verb_info.map(|(_, name)| name);
@@ -518,6 +564,7 @@ fn evaluate_simple_command(
                     verb,
                     tokens,
                     verb_idx,
+                    tool_prefix,
                 )));
             }
             // Ancestor gap: the word is not itself at/below a trusted root, but
@@ -531,6 +578,7 @@ fn evaluate_simple_command(
                             &candidate.display().to_string(),
                             &found.trusted_root,
                             &found.realm_root,
+                            tool_prefix,
                         )));
                     }
                     Ok(None) => {}
@@ -959,24 +1007,24 @@ fn wildcard_matches(pattern: &[char], text: &[char]) -> bool {
     p_idx == pattern.len()
 }
 
-fn build_decision(tool: &str, path: &Path) -> Decision {
+fn build_decision(tool: &str, path: &Path, tool_prefix: ToolPrefix) -> Decision {
     Decision {
         hook_specific_output: DecisionInner {
             hook_event_name: "PreToolUse",
             permission_decision: PermissionDecision::Deny,
-            permission_decision_reason: message_for(tool, path),
+            permission_decision_reason: message_for(tool, path, tool_prefix),
         },
     }
 }
 
-fn build_cli_denied_decision() -> Decision {
+fn build_cli_denied_decision(tool_prefix: ToolPrefix) -> Decision {
     Decision {
         hook_specific_output: DecisionInner {
             hook_event_name: "PreToolUse",
             permission_decision: PermissionDecision::Deny,
-            permission_decision_reason: String::from(
+            permission_decision_reason: format!(
                 "The remargin CLI is denied for agents in this folder (cli_allowed: false). \
-                 Use the mcp__remargin__* tools instead.",
+                 Use the {tool_prefix}* tools instead."
             ),
         },
     }
@@ -988,9 +1036,10 @@ fn build_bash_decision(
     verb: Option<&str>,
     tokens: &[String],
     verb_idx: Option<usize>,
+    tool_prefix: ToolPrefix,
 ) -> Decision {
     let reason = verb
-        .and_then(|name| verb_guidance(name, matched_path, tokens, verb_idx))
+        .and_then(|name| verb_guidance(name, matched_path, tokens, verb_idx, tool_prefix))
         .map_or_else(
             || no_equivalent_message(matched_path, realm_root),
             |guidance| {
@@ -1022,59 +1071,60 @@ fn verb_guidance(
     matched_path: &str,
     tokens: &[String],
     verb_idx: Option<usize>,
+    tool_prefix: ToolPrefix,
 ) -> Option<String> {
     Some(match verb {
         "sed" | "awk" => format!(
-            "Use `mcp__remargin__get path={matched_path}` with `start_line`/`end_line` for reads, \
-             or `mcp__remargin__write path={matched_path}` partial for in-place edits."
+            "Use `{tool_prefix}get path={matched_path}` with `start_line`/`end_line` for reads, \
+             or `{tool_prefix}write path={matched_path}` partial for in-place edits."
         ),
         "cat" | "less" | "more" => {
-            format!("Use `mcp__remargin__get path={matched_path}` (text mode by default).")
+            format!("Use `{tool_prefix}get path={matched_path}` (text mode by default).")
         }
         "head" | "tail" => format!(
-            "Use `mcp__remargin__get path={matched_path}` with bounded `start_line`/`end_line` \
-             (consult `mcp__remargin__metadata` first)."
+            "Use `{tool_prefix}get path={matched_path}` with bounded `start_line`/`end_line` \
+             (consult `{tool_prefix}metadata` first)."
         ),
         "grep" | "rg" | "ag" => {
             let pattern = first_non_flag_arg(tokens, verb_idx).unwrap_or("<pattern>");
             format!(
-                "Use `mcp__remargin__search pattern={pattern} path={matched_path}` (file-scoped; \
+                "Use `{tool_prefix}search pattern={pattern} path={matched_path}` (file-scoped; \
                  respects comment / body distinction)."
             )
         }
         "find" => format!(
-            "Use `mcp__remargin__query` for comment/file enumeration, or \
-             `mcp__remargin__ls path={matched_path}` for listings."
+            "Use `{tool_prefix}query` for comment/file enumeration, or \
+             `{tool_prefix}ls path={matched_path}` for listings."
         ),
-        "ls" => format!("Use `mcp__remargin__ls path={matched_path}`."),
+        "ls" => format!("Use `{tool_prefix}ls path={matched_path}`."),
         "mv" => {
             let (src, dst) = mv_src_dst(tokens, verb_idx, matched_path);
             format!(
-                "Use `mcp__remargin__mv src={src} dst={dst}` -- preserves comment IDs + thread \
+                "Use `{tool_prefix}mv src={src} dst={dst}` -- preserves comment IDs + thread \
                  state."
             )
         }
         "rm" => format!(
-            "Use `mcp__remargin__rm path={matched_path}` (sandbox-aware) or `mcp__remargin__purge` \
+            "Use `{tool_prefix}rm path={matched_path}` (sandbox-aware) or `{tool_prefix}purge` \
              when you mean drop comments only."
         ),
-        "cp" => String::from(
-            "Use `mcp__remargin__cp` -- copies the file under remargin's guards (markdown is \
-             copied body-only so the duplicate gets a clean comment history).",
+        "cp" => format!(
+            "Use `{tool_prefix}cp` -- copies the file under remargin's guards (markdown is \
+             copied body-only so the duplicate gets a clean comment history)."
         ),
         "tee" | "dd" => format!(
-            "Use `mcp__remargin__write path={matched_path}` instead of redirecting output to the \
+            "Use `{tool_prefix}write path={matched_path}` instead of redirecting output to the \
              file."
         ),
         "vim" | "nvim" | "nano" | "code" => format!(
-            "Use `mcp__remargin__write path={matched_path}` or `mcp__remargin__edit \
+            "Use `{tool_prefix}write path={matched_path}` or `{tool_prefix}edit \
              path={matched_path}` for managed paths -- your editor would bypass the \
              comment-preservation guarantees."
         ),
-        "git" => String::from(
-            "For the content change, run the matching `mcp__remargin__*` op (mv / rm / write). \
+        "git" => format!(
+            "For the content change, run the matching `{tool_prefix}*` op (mv / rm / write). \
              git itself is the human's job here -- ask them to run it from their own terminal; \
-             no git invocation against a managed realm is available to you.",
+             no git invocation against a managed realm is available to you."
         ),
         _ => return None,
     })
@@ -1098,6 +1148,7 @@ fn build_in_realm_cwd_decision(
     cwd: &Path,
     realm_root: &Path,
     commands: &[Vec<String>],
+    tool_prefix: ToolPrefix,
 ) -> Decision {
     let cwd_display = cwd.display().to_string();
     let realm = realm_root.display();
@@ -1105,11 +1156,12 @@ fn build_in_realm_cwd_decision(
         "Your working directory {cwd_display} is inside the remargin-managed realm rooted at \
          {realm}. From an in-realm working directory every shell command is denied unless every \
          command in it is the remargin CLI — a bare relative word here could silently address a \
-         managed file. Use the mcp__remargin__* tools (or the remargin CLI) for managed content; \
+         managed file. Use the {tool_prefix}* tools (or the remargin CLI) for managed content; \
          run any other shell work from outside {realm}."
     );
     if let Some((tokens, verb_idx, verb)) = first_non_remargin_command(commands)
-        && let Some(guidance) = verb_guidance(verb, &cwd_display, tokens, Some(verb_idx))
+        && let Some(guidance) =
+            verb_guidance(verb, &cwd_display, tokens, Some(verb_idx), tool_prefix)
     {
         reason.push(' ');
         reason.push_str(&guidance);
@@ -1132,6 +1184,7 @@ fn build_ancestor_destructive_decision(
     target: &str,
     trusted_root: &Path,
     realm_root: &Path,
+    tool_prefix: ToolPrefix,
 ) -> Decision {
     let root = trusted_root.display();
     let realm = realm_root.display();
@@ -1139,7 +1192,7 @@ fn build_ancestor_destructive_decision(
         "This shell command targets {target}, which sits at or above the remargin-managed subtree \
          rooted at {root} inside the realm at {realm}. A destructive operation on {target} would \
          reach into and damage that managed subtree, and no remargin operation deletes the realm \
-         wholesale. Operate on specific managed paths with the mcp__remargin__* tools, or do this \
+         wholesale. Operate on specific managed paths with the {tool_prefix}* tools, or do this \
          work outside {realm}."
     );
     Decision {
@@ -1179,25 +1232,25 @@ fn mv_src_dst<'cmd>(
     (src, dst)
 }
 
-fn message_for(tool: &str, path: &Path) -> String {
+fn message_for(tool: &str, path: &Path, tool_prefix: ToolPrefix) -> String {
     let p = path.display();
     match tool {
-        "Read" => format!("Path {p} is remargin-managed. Use mcp__remargin__get path={p} instead."),
+        "Read" => format!("Path {p} is remargin-managed. Use {tool_prefix}get path={p} instead."),
         "Write" | "MultiEdit" => {
-            format!("Path {p} is remargin-managed. Use mcp__remargin__write path={p} instead.")
+            format!("Path {p} is remargin-managed. Use {tool_prefix}write path={p} instead.")
         }
         "Edit" => {
-            format!("Path {p} is remargin-managed. Use mcp__remargin__edit path={p} instead.")
+            format!("Path {p} is remargin-managed. Use {tool_prefix}edit path={p} instead.")
         }
         "NotebookEdit" => format!(
-            "Path {p} is remargin-managed. Use mcp__remargin__write path={p} (notebook edits are \
+            "Path {p} is remargin-managed. Use {tool_prefix}write path={p} (notebook edits are \
              text edits here)."
         ),
         "Grep" => format!(
-            "Path {p} is remargin-managed. Use mcp__remargin__search path={p} (file-scoped; \
+            "Path {p} is remargin-managed. Use {tool_prefix}search path={p} (file-scoped; \
              respects comment / body distinction)."
         ),
-        "Glob" => format!("Path {p} is remargin-managed. Use mcp__remargin__ls path={p}."),
+        "Glob" => format!("Path {p} is remargin-managed. Use {tool_prefix}ls path={p}."),
         _ => format!("Path {p} is remargin-managed; use the appropriate remargin MCP tool."),
     }
 }
