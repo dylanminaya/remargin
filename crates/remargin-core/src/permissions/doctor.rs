@@ -145,6 +145,16 @@ pub struct DoctorReport {
     /// Findings in report order. Empty = clean.
     pub findings: Vec<DoctorFinding>,
 
+    /// Whether the goose guard plugin is wired in either plugin scope.
+    /// `None` when no goose installation was found — a machine that does
+    /// not run goose has no verdict, which is not the same as a `false`.
+    pub goose_guard_installed: Option<bool>,
+
+    /// Whether the goose `SessionStart` backstop is wired in either plugin
+    /// scope, `None` under the same no-installation condition as
+    /// [`goose_guard_installed`](Self::goose_guard_installed).
+    pub goose_session_guard_installed: Option<bool>,
+
     /// Whether the hook-installed check passed. When `false`, subsequent
     /// checks were skipped.
     pub hook_installed: bool,
@@ -164,6 +174,79 @@ impl DoctorReport {
     #[must_use]
     pub const fn is_clean(&self) -> bool {
         self.findings.is_empty()
+    }
+}
+
+/// The two goose plugin scopes, probed once per run.
+///
+/// Both goose checks read the same plugin roots, and the report's verdicts
+/// sit beside the findings derived from them, so every consumer reads this
+/// one snapshot: a second probe could observe a stack that changed between
+/// them and report a verdict its own findings contradict.
+struct GooseProbe {
+    /// `PreToolUse` outcome per scope — user first, then project.
+    guard: [GooseTestOutcome; 2],
+    project_dir: PathBuf,
+    /// `SessionStart` outcome per scope, in the same order as `guard`.
+    session_guard: [GooseTestOutcome; 2],
+    user_dir: PathBuf,
+}
+
+impl GooseProbe {
+    /// A guard entry counts as wired when either plugin scope reports it
+    /// live — `install --local` is a supported wiring.
+    fn any_installed(outcomes: &[GooseTestOutcome; 2]) -> bool {
+        outcomes
+            .iter()
+            .any(|outcome| matches!(*outcome, GooseTestOutcome::Installed))
+    }
+
+    /// Findings for the guard plugin. A broken plugin in either scope is
+    /// reported ahead of a plain absence because it names a different
+    /// repair.
+    fn guard_findings(&self) -> Vec<DoctorFinding> {
+        if self.guard_installed() {
+            return Vec::new();
+        }
+        for outcome in &self.guard {
+            if let GooseTestOutcome::Broken(reason) = outcome {
+                return vec![goose_guard_broken_finding(reason)];
+            }
+        }
+        vec![goose_guard_missing_finding(
+            &self.user_dir,
+            &self.project_dir,
+        )]
+    }
+
+    fn guard_installed(&self) -> bool {
+        Self::any_installed(&self.guard)
+    }
+
+    /// Findings for the `SessionStart` backstop. A `Broken` verdict
+    /// contributes its fault to the message rather than a second finding:
+    /// the entry is not live either way, and one repair — reinstalling it —
+    /// covers both.
+    fn session_guard_findings(&self) -> Vec<DoctorFinding> {
+        if self.session_guard_installed() {
+            return Vec::new();
+        }
+        let fault = self.session_guard.iter().find_map(|outcome| {
+            if let GooseTestOutcome::Broken(reason) = outcome {
+                Some(reason.as_str())
+            } else {
+                None
+            }
+        });
+        vec![goose_session_guard_missing_finding(
+            &self.user_dir,
+            &self.project_dir,
+            fault,
+        )]
+    }
+
+    fn session_guard_installed(&self) -> bool {
+        Self::any_installed(&self.session_guard)
     }
 }
 
@@ -334,6 +417,13 @@ pub fn run_doctor(
         (GuardTestOutcome::Installed, _) | (_, GuardTestOutcome::Installed)
     );
 
+    // Probed before the hook gate so the verdicts survive its short-circuit:
+    // a report that dropped them there would say there is no goose
+    // installation at all, which is the one thing `None` means.
+    let goose = probe_goose(system, cwd)?;
+    let goose_guard_installed = goose.as_ref().map(GooseProbe::guard_installed);
+    let goose_session_guard_installed = goose.as_ref().map(GooseProbe::session_guard_installed);
+
     let mut findings: Vec<DoctorFinding> = Vec::new();
 
     if !hook_installed {
@@ -353,6 +443,8 @@ pub fn run_doctor(
         // Short-circuit: no further checks are meaningful without the hook.
         return Ok(DoctorReport {
             findings,
+            goose_guard_installed,
+            goose_session_guard_installed,
             hook_installed,
             session_guard_installed,
             project_settings_file,
@@ -379,12 +471,13 @@ pub fn run_doctor(
         });
     }
 
-    if checks.contains(&CheckName::GooseGuard) {
-        findings.extend(goose_guard_findings(system, cwd)?);
-    }
-
-    if checks.contains(&CheckName::GooseSessionGuard) {
-        findings.extend(goose_session_guard_findings(system, cwd)?);
+    if let Some(probe) = &goose {
+        if checks.contains(&CheckName::GooseGuard) {
+            findings.extend(probe.guard_findings());
+        }
+        if checks.contains(&CheckName::GooseSessionGuard) {
+            findings.extend(probe.session_guard_findings());
+        }
     }
 
     // Lint containment before resolving: an out-of-realm entry makes
@@ -414,46 +507,71 @@ pub fn run_doctor(
         findings.extend(schema_lints);
     }
 
-    // Leftover, identity, sandbox, and trusted-root-missing all walk
-    // `resolve_permissions` / `ResolvedConfig::resolve`, which fail closed
-    // on an out-of-realm root and bail on any parse/schema fault. Run them
-    // only when the config is clean on both counts, so doctor names the
-    // misconfig above instead of crashing on the very error it exists to
-    // explain. Each additionally runs only when its check is selected.
     if !has_escape && config_resolves {
-        if checks.contains(&CheckName::LeftoverRules) {
-            // Drift lives where the retired projection wrote: restrict
-            // emitted rules into settings.local.json, so that file is
-            // scanned alongside the hook-scope files.
-            let settings_files = [
-                user_settings_file.to_path_buf(),
-                project_settings_file.clone(),
-                cwd.join(".claude/settings.local.json"),
-            ];
-            findings.extend(leftover_projected_rule_findings(
-                system,
-                cwd,
-                &settings_files,
-            )?);
-        }
-        if checks.contains(&CheckName::IdentityKey) {
-            findings.extend(identity_key_findings(system, cwd)?);
-        }
-        if checks.contains(&CheckName::StaleSandbox) {
-            findings.extend(stale_sandbox_findings(system, cwd)?);
-        }
-        if checks.contains(&CheckName::TrustedRootMissing) {
-            findings.extend(trusted_root_missing_findings(system, cwd)?);
-        }
+        // Drift lives where the retired projection wrote: restrict emitted
+        // rules into settings.local.json, so that file is scanned alongside
+        // the hook-scope files.
+        let settings_files = [
+            user_settings_file.to_path_buf(),
+            project_settings_file.clone(),
+            cwd.join(".claude/settings.local.json"),
+        ];
+        findings.extend(resolve_dependent_findings(
+            system,
+            cwd,
+            checks,
+            &settings_files,
+        )?);
     }
 
     Ok(DoctorReport {
         findings,
+        goose_guard_installed,
+        goose_session_guard_installed,
         hook_installed,
         session_guard_installed,
         project_settings_file,
         user_settings_file: user_settings_file.to_path_buf(),
     })
+}
+
+/// Findings from the checks that walk `resolve_permissions` /
+/// `ResolvedConfig::resolve`: leftover rules, identity keys, stale sandbox
+/// entries, and trusted roots pointing at nothing.
+///
+/// Every check here fails closed on an out-of-realm trusted root and bails
+/// on a parse/schema fault, so the caller runs this only once it has
+/// established that the config resolves — otherwise doctor would crash on
+/// the very misconfiguration it exists to explain. Each check additionally
+/// contributes only when it is selected.
+///
+/// # Errors
+///
+/// I/O or parse errors surfaced by the resolvers these checks walk.
+fn resolve_dependent_findings(
+    system: &dyn System,
+    cwd: &Path,
+    checks: &HashSet<CheckName>,
+    settings_files: &[PathBuf],
+) -> Result<Vec<DoctorFinding>> {
+    let mut findings = Vec::new();
+    if checks.contains(&CheckName::LeftoverRules) {
+        findings.extend(leftover_projected_rule_findings(
+            system,
+            cwd,
+            settings_files,
+        )?);
+    }
+    if checks.contains(&CheckName::IdentityKey) {
+        findings.extend(identity_key_findings(system, cwd)?);
+    }
+    if checks.contains(&CheckName::StaleSandbox) {
+        findings.extend(stale_sandbox_findings(system, cwd)?);
+    }
+    if checks.contains(&CheckName::TrustedRootMissing) {
+        findings.extend(trusted_root_missing_findings(system, cwd)?);
+    }
+    Ok(findings)
 }
 
 /// One [`FindingKind::LeftoverProjectedRule`] per deny rule the hook has
@@ -520,82 +638,39 @@ fn is_stale_remargin_cli_deny(canonical_rule: &str) -> bool {
         .is_some_and(|inner| inner.split_whitespace().next() == Some("remargin"))
 }
 
-/// Findings for the goose guard plugin.
+/// The goose stack as one doctor run observed it, or `None` when there is
+/// nothing to observe: `~/.agents` is the root goose discovers user-scope
+/// plugins from, so its absence means there is no goose session to guard
+/// and the checks have nothing to say.
 ///
-/// Silent unless goose is present: `~/.agents` is the root goose discovers
-/// user-scope plugins from, so its absence means there is no goose session
-/// to guard and the check has nothing to say. When goose *is* present, the
-/// guard counts as wired if either plugin scope reports it live; a broken
-/// plugin in either scope is reported ahead of a plain absence because it
-/// names a different repair.
-fn goose_guard_findings(system: &dyn System, cwd: &Path) -> Result<Vec<DoctorFinding>> {
+/// # Errors
+///
+/// I/O errors from the plugin-directory probes.
+fn probe_goose(system: &dyn System, cwd: &Path) -> Result<Option<GooseProbe>> {
     let Ok(home_var) = system.env_var("HOME") else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     let home = PathBuf::from(home_var);
     if !system.exists(&goose_install::agents_dir(&home))? {
-        return Ok(Vec::new());
+        return Ok(None);
     }
 
     let user_dir = goose_install::plugin_dir(&home);
     let project_dir = goose_install::plugin_dir(cwd);
-    let outcomes = [
+    let guard = [
         goose_install::test(system, &user_dir)?,
         goose_install::test(system, &project_dir)?,
     ];
-    if outcomes
-        .iter()
-        .any(|outcome| matches!(*outcome, GooseTestOutcome::Installed))
-    {
-        return Ok(Vec::new());
-    }
-    for outcome in &outcomes {
-        if let GooseTestOutcome::Broken(reason) = outcome {
-            return Ok(vec![goose_guard_broken_finding(reason)]);
-        }
-    }
-    Ok(vec![goose_guard_missing_finding(&user_dir, &project_dir)])
-}
-
-/// Findings for the goose `SessionStart` backstop.
-///
-/// Gated on a goose installation the same way [`goose_guard_findings`] is,
-/// and satisfied by either plugin scope. A `Broken` verdict contributes its
-/// fault to the message rather than a second finding: the entry is not live
-/// either way, and one repair — reinstalling it — covers both.
-fn goose_session_guard_findings(system: &dyn System, cwd: &Path) -> Result<Vec<DoctorFinding>> {
-    let Ok(home_var) = system.env_var("HOME") else {
-        return Ok(Vec::new());
-    };
-    let home = PathBuf::from(home_var);
-    if !system.exists(&goose_install::agents_dir(&home))? {
-        return Ok(Vec::new());
-    }
-
-    let user_dir = goose_install::plugin_dir(&home);
-    let project_dir = goose_install::plugin_dir(cwd);
-    let outcomes = [
+    let session_guard = [
         goose_install::test_session_guard(system, &user_dir)?,
         goose_install::test_session_guard(system, &project_dir)?,
     ];
-    if outcomes
-        .iter()
-        .any(|outcome| matches!(*outcome, GooseTestOutcome::Installed))
-    {
-        return Ok(Vec::new());
-    }
-    let fault = outcomes.iter().find_map(|outcome| {
-        if let GooseTestOutcome::Broken(reason) = outcome {
-            Some(reason.as_str())
-        } else {
-            None
-        }
-    });
-    Ok(vec![goose_session_guard_missing_finding(
-        &user_dir,
-        &project_dir,
-        fault,
-    )])
+    Ok(Some(GooseProbe {
+        guard,
+        project_dir,
+        session_guard,
+        user_dir,
+    }))
 }
 
 fn goose_session_guard_missing_finding(
@@ -924,9 +999,11 @@ fn stale_sandbox_finding(path: &Path, author: &str) -> DoctorFinding {
 /// Render a [`DoctorReport`] as human-readable text.
 ///
 /// When `verbose` is `true`, a `Checks:` section is appended after the
-/// findings block (or after the clean message) listing the hook-installed
-/// verdict and the paths of both settings files that were inspected.
-/// This section appears in both the clean and findings cases.
+/// findings block (or after the clean message) listing one verdict per
+/// check and the paths of both settings files that were inspected. This
+/// section appears in both the clean and findings cases. The goose lines
+/// are rendered only when the report carries a goose verdict, so a machine
+/// without goose says nothing about it.
 #[must_use]
 pub fn render_doctor_text(report: &DoctorReport, verbose: bool) -> String {
     use core::fmt::Write as _;
@@ -944,19 +1021,23 @@ pub fn render_doctor_text(report: &DoctorReport, verbose: bool) -> String {
         }
     }
     if verbose {
-        let hook_verdict = if report.hook_installed {
-            "ok"
-        } else {
-            "missing"
-        };
-        let guard_verdict = if report.session_guard_installed {
-            "ok"
-        } else {
-            "missing"
-        };
         let _ = writeln!(out, "Checks:");
-        let _ = writeln!(out, "  hook-installed: {hook_verdict}");
-        let _ = writeln!(out, "  session-guard: {guard_verdict}");
+        let _ = writeln!(
+            out,
+            "  hook-installed: {}",
+            check_verdict(report.hook_installed)
+        );
+        let _ = writeln!(
+            out,
+            "  session-guard: {}",
+            check_verdict(report.session_guard_installed)
+        );
+        if let Some(installed) = report.goose_guard_installed {
+            let _ = writeln!(out, "  goose-guard: {}", check_verdict(installed));
+        }
+        if let Some(installed) = report.goose_session_guard_installed {
+            let _ = writeln!(out, "  goose-session-guard: {}", check_verdict(installed));
+        }
         let _ = writeln!(
             out,
             "  user-settings: {}",
@@ -969,6 +1050,12 @@ pub fn render_doctor_text(report: &DoctorReport, verbose: bool) -> String {
         );
     }
     out
+}
+
+/// The verbose `Checks:` wording for one verdict, shared by every line so
+/// the vocabulary cannot drift between checks.
+const fn check_verdict(installed: bool) -> &'static str {
+    if installed { "ok" } else { "missing" }
 }
 
 /// Render a [`DoctorReport`] as an agent-executable repair prompt.

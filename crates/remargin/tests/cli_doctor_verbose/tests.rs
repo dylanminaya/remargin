@@ -157,6 +157,99 @@ fn clean_verbose_differs_from_plain() {
     );
 }
 
+// ---- goose stack --------------------------------------------------------
+
+/// The guard plugin `remargin goose pretool install` writes, with both hook
+/// entries and a command pointing at a binary that exists under `root`.
+fn wire_goose_plugin(root: &Path) {
+    let binary = root.join("bin/remargin");
+    fs::create_dir_all(binary.parent().unwrap()).unwrap();
+    fs::write(&binary, "binary").unwrap();
+
+    let hooks = root.join(".agents/plugins/remargin-guard/hooks/hooks.json");
+    fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+    let manifest = json!({
+        "hooks": {
+            "PreToolUse": [{ "hooks": [{
+                "type": "command",
+                "command": format!("{} goose pretool", binary.display()),
+            }] }],
+            "SessionStart": [{ "hooks": [{
+                "type": "command",
+                "command": format!("{} goose session-guard", binary.display()),
+            }] }],
+        }
+    });
+    fs::write(&hooks, serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+}
+
+/// The realm has no goose installation, so the verbose section says nothing
+/// about the goose stack.
+#[test]
+fn clean_verbose_omits_goose_lines_without_goose() {
+    let realm = TempDir::new().unwrap();
+    let settings = realm.path().join("settings.json");
+    fs::write(&settings, hook_settings_json()).unwrap();
+
+    let out = run_doctor_with_settings(realm.path(), &settings, &["--verbose"]);
+    assert_status(&out, 0);
+    let stdout = stdout_of(&out);
+    assert!(
+        !stdout.contains("goose-guard:") && !stdout.contains("goose-session-guard:"),
+        "no goose installed, so no goose verdict line, got:\n{stdout}",
+    );
+}
+
+/// A wired goose stack under the pinned `$HOME` renders one verdict line
+/// per goose check, and `--json` carries the same verdicts.
+#[test]
+fn clean_verbose_reports_a_wired_goose_stack() {
+    let realm = TempDir::new().unwrap();
+    let settings = realm.path().join("settings.json");
+    fs::write(&settings, hook_settings_json()).unwrap();
+    wire_goose_plugin(realm.path());
+
+    let out = run_doctor_with_settings(realm.path(), &settings, &["--verbose"]);
+    assert_status(&out, 0);
+    let stdout = stdout_of(&out);
+    assert!(
+        stdout.contains("goose-guard: ok"),
+        "verbose output must show goose-guard: ok, got:\n{stdout}",
+    );
+    assert!(
+        stdout.contains("goose-session-guard: ok"),
+        "verbose output must show goose-session-guard: ok, got:\n{stdout}",
+    );
+
+    let json_out = run_doctor_with_settings(realm.path(), &settings, &["--json"]);
+    assert_status(&json_out, 0);
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&json_out)).unwrap();
+    assert_eq!(report["goose_guard_installed"], json!(true));
+    assert_eq!(report["goose_session_guard_installed"], json!(true));
+}
+
+/// A goose installation with no guard plugin renders both verdicts as
+/// missing beside the findings that name the repair.
+#[test]
+fn verbose_reports_an_unwired_goose_stack_as_missing() {
+    let realm = TempDir::new().unwrap();
+    let settings = realm.path().join("settings.json");
+    fs::write(&settings, hook_settings_json()).unwrap();
+    fs::create_dir_all(realm.path().join(".agents/plugins")).unwrap();
+
+    let out = run_doctor_with_settings(realm.path(), &settings, &["--verbose"]);
+    assert_status(&out, 1);
+    let stdout = stdout_of(&out);
+    assert!(
+        stdout.contains("goose-guard: missing"),
+        "verbose output must show goose-guard: missing, got:\n{stdout}",
+    );
+    assert!(
+        stdout.contains("goose-session-guard: missing"),
+        "verbose output must show goose-session-guard: missing, got:\n{stdout}",
+    );
+}
+
 // ---- findings case ------------------------------------------------------
 
 /// Without `--verbose`, `doctor` in the findings case emits only the

@@ -346,6 +346,8 @@ fn guard_absent_from_both_scopes_reports_session_guard_missing() {
 fn clean_report() -> DoctorReport {
     DoctorReport {
         findings: vec![],
+        goose_guard_installed: None,
+        goose_session_guard_installed: None,
         hook_installed: true,
         session_guard_installed: true,
         project_settings_file: PathBuf::from("/r/.claude/settings.local.json"),
@@ -361,6 +363,8 @@ fn findings_report() -> DoctorReport {
             remedy: String::from("run install"),
             severity: Severity::Critical,
         }],
+        goose_guard_installed: None,
+        goose_session_guard_installed: None,
         hook_installed: false,
         session_guard_installed: false,
         project_settings_file: PathBuf::from("/r/.claude/settings.local.json"),
@@ -573,6 +577,8 @@ fn render_prompt_names_each_finding_rule_and_file() {
             leftover_finding_fixture("Bash(remargin *)", "/r/.claude/settings.local.json"),
             leftover_finding_fixture("Edit(/r/**)", "/home/u/.claude/settings.json"),
         ],
+        goose_guard_installed: None,
+        goose_session_guard_installed: None,
         hook_installed: true,
         session_guard_installed: true,
         project_settings_file: PathBuf::from("/r/.claude/settings.local.json"),
@@ -829,6 +835,8 @@ fn identity_findings_render_and_serialize() {
                 severity: Severity::Warning,
             },
         ],
+        goose_guard_installed: None,
+        goose_session_guard_installed: None,
         hook_installed: true,
         session_guard_installed: true,
         project_settings_file: PathBuf::from("/r/.claude/settings.json"),
@@ -993,6 +1001,8 @@ fn config_schema_lint_serializes_and_renders() {
             remedy: String::from("Fix the permissions schema in /r/.remargin.yaml."),
             severity: Severity::Warning,
         }],
+        goose_guard_installed: None,
+        goose_session_guard_installed: None,
         hook_installed: true,
         session_guard_installed: true,
         project_settings_file: PathBuf::from("/r/.claude/settings.json"),
@@ -1204,6 +1214,8 @@ fn stale_sandbox_serializes_and_renders() {
             ),
             severity: Severity::Warning,
         }],
+        goose_guard_installed: None,
+        goose_session_guard_installed: None,
         hook_installed: true,
         session_guard_installed: true,
         project_settings_file: PathBuf::from("/r/.claude/settings.json"),
@@ -1338,6 +1350,8 @@ fn trusted_root_missing_serializes_and_renders() {
             ),
             severity: Severity::Warning,
         }],
+        goose_guard_installed: None,
+        goose_session_guard_installed: None,
         hook_installed: true,
         session_guard_installed: true,
         project_settings_file: PathBuf::from("/r/.claude/settings.json"),
@@ -1820,4 +1834,163 @@ fn goose_session_guard_check_is_selectable_by_slug() {
         !kinds(&deselected).contains(&FindingKind::GooseSessionGuardMissing),
         "deselected check must not report: {deselected:#?}",
     );
+}
+
+// ---- goose verdicts on the report ---------------------------------------
+
+/// No goose installation leaves both verdicts unset: a machine that does
+/// not run goose has no verdict to report, and `None` says so instead of
+/// claiming a false.
+#[test]
+fn goose_absent_leaves_both_verdicts_unset() {
+    let report = run_goose_doctor(&goose_mock(&[]));
+    assert_eq!(report.goose_guard_installed, None, "{report:#?}");
+    assert_eq!(report.goose_session_guard_installed, None, "{report:#?}");
+}
+
+/// goose installed with no guard plugin: both verdicts are a reported
+/// `false`, beside the findings that name the repair.
+#[test]
+fn goose_without_the_plugin_reports_false_verdicts() {
+    let system = goose_mock(&[("/home/u/.agents/marker", "x")]);
+    let report = run_goose_doctor(&system);
+    assert_eq!(report.goose_guard_installed, Some(false), "{report:#?}");
+    assert_eq!(
+        report.goose_session_guard_installed,
+        Some(false),
+        "{report:#?}",
+    );
+}
+
+/// A fully wired stack reports both verdicts true, and the `--json` shape
+/// carries them for consumers that never see the text render.
+#[test]
+fn goose_wired_stack_reports_true_verdicts() {
+    let system = goose_mock(&[
+        ("/opt/bin/remargin", "binary"),
+        (
+            "/home/u/.agents/plugins/remargin-guard/hooks/hooks.json",
+            &goose_hooks_json_with_session("/opt/bin/remargin"),
+        ),
+    ]);
+    let report = run_goose_doctor(&system);
+    assert_eq!(report.goose_guard_installed, Some(true), "{report:#?}");
+    assert_eq!(
+        report.goose_session_guard_installed,
+        Some(true),
+        "{report:#?}",
+    );
+
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(
+        json.contains("\"goose_guard_installed\":true")
+            && json.contains("\"goose_session_guard_installed\":true"),
+        "wire shape carries both verdicts: {json}",
+    );
+    let parsed: DoctorReport = serde_json::from_str(&json).unwrap();
+    assert_eq!(report, parsed);
+}
+
+/// The two entries are verdicts of their own: a `PreToolUse`-only install
+/// is a live guard with no backstop, and the report says exactly that.
+#[test]
+fn goose_pretool_only_install_splits_the_verdicts() {
+    let system = goose_mock(&[
+        ("/opt/bin/remargin", "binary"),
+        (
+            "/home/u/.agents/plugins/remargin-guard/hooks/hooks.json",
+            &goose_hooks_json("/opt/bin/remargin goose pretool"),
+        ),
+    ]);
+    let report = run_goose_doctor(&system);
+    assert_eq!(report.goose_guard_installed, Some(true), "{report:#?}");
+    assert_eq!(
+        report.goose_session_guard_installed,
+        Some(false),
+        "{report:#?}",
+    );
+}
+
+/// A broken plugin is not a wired one: the verdict agrees with the
+/// `GooseGuardBroken` finding beside it rather than reading the plugin
+/// directory's presence as a pass.
+#[test]
+fn goose_broken_plugin_reports_a_false_guard_verdict() {
+    let system = goose_mock(&[(
+        "/home/u/.agents/plugins/remargin-guard/hooks/hooks.json",
+        "{ not json",
+    )]);
+    let report = run_goose_doctor(&system);
+    assert!(kinds(&report).contains(&FindingKind::GooseGuardBroken));
+    assert_eq!(report.goose_guard_installed, Some(false), "{report:#?}");
+}
+
+/// The verdicts survive the hook-missing short-circuit. The gate skips the
+/// goose *findings* the same way it skips the Claude session-guard finding,
+/// but a report that dropped the verdicts there would claim there is no
+/// goose installation at all.
+#[test]
+fn goose_verdicts_survive_the_hook_missing_short_circuit() {
+    let system = mock_with_files(&[(
+        "/home/u/.agents/plugins/remargin-guard/hooks/hooks.json",
+        "{ not json",
+    )]);
+    system.set_env_var("HOME", "/home/u");
+    let report = run_doctor(
+        &system,
+        Path::new("/r"),
+        Path::new("/home/u/.claude/settings.json"),
+    )
+    .unwrap();
+    assert_eq!(kinds(&report), vec![FindingKind::HookMissing]);
+    assert_eq!(report.goose_guard_installed, Some(false), "{report:#?}");
+    assert_eq!(
+        report.goose_session_guard_installed,
+        Some(false),
+        "{report:#?}",
+    );
+}
+
+/// A report from a non-goose machine renders no goose line at all — the
+/// verbose section stays silent about a stack that is not there.
+#[test]
+fn render_verbose_omits_goose_lines_without_goose() {
+    let out = render_doctor_text(&clean_report(), true);
+    assert!(out.contains("Checks:"), "missing Checks: {out}");
+    assert!(
+        !out.contains("goose-guard:"),
+        "unexpected goose line: {out}"
+    );
+    assert!(
+        !out.contains("goose-session-guard:"),
+        "unexpected goose line: {out}",
+    );
+}
+
+/// Both verdicts render one line each, in the established verdict wording.
+#[test]
+fn render_verbose_names_both_goose_verdicts() {
+    let mut report = clean_report();
+    report.goose_guard_installed = Some(true);
+    report.goose_session_guard_installed = Some(false);
+    let out = render_doctor_text(&report, true);
+    assert!(
+        out.contains("goose-guard: ok"),
+        "missing goose guard verdict: {out}",
+    );
+    assert!(
+        out.contains("goose-session-guard: missing"),
+        "missing goose backstop verdict: {out}",
+    );
+}
+
+/// The goose lines belong to the verbose section: a plain render never
+/// carries them.
+#[test]
+fn render_plain_omits_goose_lines() {
+    let mut report = clean_report();
+    report.goose_guard_installed = Some(true);
+    report.goose_session_guard_installed = Some(true);
+    let out = render_doctor_text(&report, false);
+    assert!(!out.contains("goose-guard"), "goose line in plain: {out}");
 }
