@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use os_shim::System;
 use serde::{Deserialize, Serialize};
+use tixschema::model_schema;
 
 use crate::config::identity::IdentityFlags;
 use crate::config::permissions::resolve::{
@@ -36,6 +37,7 @@ use crate::permissions::session_guard_install::{self, TestOutcome as GuardTestOu
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+#[model_schema]
 pub enum Severity {
     /// No enforcement at all — blocks every other meaningful check.
     Critical,
@@ -47,6 +49,7 @@ pub enum Severity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+#[model_schema]
 pub enum FindingKind {
     /// An agent identity whose resolved key path lives under the user's
     /// primary SSH directory (`~/.ssh`) — the agent can read and sign
@@ -124,6 +127,7 @@ pub enum FindingKind {
 /// A single diagnostic finding from a doctor check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
+#[model_schema]
 pub struct DoctorFinding {
     /// What the finding is.
     pub kind: FindingKind,
@@ -141,6 +145,7 @@ pub struct DoctorFinding {
 /// Output of a `remargin doctor` run.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
+#[model_schema]
 pub struct DoctorReport {
     /// Findings in report order. Empty = clean.
     pub findings: Vec<DoctorFinding>,
