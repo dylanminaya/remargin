@@ -16,7 +16,7 @@ use tixschema::model_schema;
 
 use crate::kind::validate_kinds;
 use crate::on_disk_comment::{OnDiskComment, comment_from_on_disk};
-use crate::reactions::ReactionEntry;
+use crate::reactions::{ReactionEntry, reaction_entry_schema};
 use crate::writer::serialize_comment;
 
 /// An acknowledgment of a comment by another participant.
