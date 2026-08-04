@@ -1251,12 +1251,13 @@ dependencies = [
 [[package]]
 name = "tixschema"
 version = "0.1.0"
-source = "git+https://github.com/tixena/tixschema.git#a0b72904be776f954ec32cc62a991da645419e41"
+source = "git+https://github.com/tixena/tixschema.git#0c04dcc72fcdea8953afe6376fca82572f7fa452"
 dependencies = [
  "log",
  "proc-macro2",
  "quote",
  "regex",
+ "regex-syntax",
  "syn 3.0.3",
 ]
 
