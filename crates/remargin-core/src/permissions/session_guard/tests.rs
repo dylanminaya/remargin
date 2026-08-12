@@ -43,6 +43,15 @@ fn realm_with_hook_command(system: MockSystem, command: &str) -> MockSystem {
         .unwrap()
 }
 
+/// A realm at `/r` whose project-scope settings declare a live entry: an
+/// absolute command whose binary is on disk.
+fn realm_with_live_hook(system: MockSystem) -> MockSystem {
+    realm_with_hook_command(
+        system.with_file(Path::new(EXE), b"binary").unwrap(),
+        &format!("{EXE} {HOOK_SUBCOMMAND}"),
+    )
+}
+
 /// Destructure a `Fail` outcome without a `panic!` (denied by clippy). The
 /// `matches!` assert carries the diagnostic; the else arm is unreachable.
 fn expect_fail(outcome: GuardOutcome) -> GuardDiagnostic {
@@ -66,9 +75,7 @@ fn expect_fail(outcome: GuardOutcome) -> GuardDiagnostic {
 /// fails and surfaces a diagnostic naming the parse failure.
 #[test]
 fn unparseable_realm_config_fails() {
-    let system = mock_with_remargin_on_path()
-        .with_dir(Path::new("/r"))
-        .unwrap()
+    let system = realm_with_live_hook(mock_with_remargin_on_path())
         .with_file(Path::new("/r/.remargin.yaml"), b": : not valid yaml : :")
         .unwrap();
 
@@ -88,12 +95,10 @@ fn unparseable_realm_config_fails() {
     );
 }
 
-/// Binary on PATH + parseable config → the session proceeds clean.
+/// A live hook entry + parseable config → the session proceeds clean.
 #[test]
-fn binary_present_and_config_parses_is_ok() {
-    let system = mock_with_remargin_on_path()
-        .with_dir(Path::new("/r"))
-        .unwrap()
+fn live_hook_and_config_parses_is_ok() {
+    let system = realm_with_live_hook(mock_with_remargin_on_path())
         .with_file(
             Path::new("/r/.remargin.yaml"),
             b"identity: alice\ntype: human\n",
@@ -106,40 +111,41 @@ fn binary_present_and_config_parses_is_ok() {
 /// No `.remargin.yaml` on the walk is not a failure — an absent realm
 /// config parses vacuously.
 #[test]
-fn no_realm_config_is_ok_when_binary_present() {
-    let system = mock_with_remargin_on_path()
-        .with_dir(Path::new("/r"))
-        .unwrap();
+fn no_realm_config_is_ok_with_a_live_hook() {
+    let system = realm_with_live_hook(mock_with_remargin_on_path());
 
     assert_eq!(session_guard(&system, Path::new("/r")), GuardOutcome::Ok);
 }
 
-/// `remargin` absent from every `PATH` entry → the guard fails and the
-/// diagnostic explains the fail-open (exit 127, non-blocking) risk.
+/// Neither settings scope declares an entry → the guard fails and names
+/// both scopes plus the install command. A `remargin` that resolves on
+/// `PATH` proves nothing here: nothing is registered to spawn it, so no
+/// tool call is gated.
 #[test]
-fn binary_not_on_path_fails() {
-    let system = MockSystem::new()
-        .with_dir(Path::new("/usr/bin"))
+fn no_hook_entry_in_either_scope_fails() {
+    let system = mock_with_remargin_on_path()
+        .with_env("HOME", "/h")
         .unwrap()
-        .with_env("PATH", "/usr/bin")
+        .with_dir(Path::new("/h"))
         .unwrap()
         .with_dir(Path::new("/r"))
         .unwrap();
 
     let diag = expect_fail(session_guard(&system, Path::new("/r")));
+    let context = diag.hook_specific_output.additional_context;
     assert!(
-        diag.hook_specific_output
-            .additional_context
-            .contains("PATH"),
-        "diagnostic should mention PATH: {}",
-        diag.hook_specific_output.additional_context,
+        context.contains("/h/.claude/settings.json")
+            && context.contains("/r/.claude/settings.json")
+            && context.contains("remargin claude pretool install"),
+        "diagnostic should name both scopes and the install command: {context}",
     );
 }
 
-/// A missing `PATH` variable is treated as "not resolvable" → failure.
+/// A missing `PATH` variable is treated as "not resolvable" → the entry
+/// that resolves through it cannot spawn, so the guard fails.
 #[test]
 fn missing_path_var_fails() {
-    let system = MockSystem::new().with_dir(Path::new("/r")).unwrap();
+    let system = realm_with_hook_command(MockSystem::new(), &format!("remargin {HOOK_SUBCOMMAND}"));
 
     assert!(matches!(
         session_guard(&system, Path::new("/r")),
@@ -152,14 +158,7 @@ fn missing_path_var_fails() {
 /// no longer a failure.
 #[test]
 fn absolute_hook_command_is_ok_without_the_binary_on_path() {
-    let system = realm_with_hook_command(
-        MockSystem::new()
-            .with_file(Path::new(EXE), b"binary")
-            .unwrap()
-            .with_env("PATH", "/usr/bin")
-            .unwrap(),
-        &format!("{EXE} {HOOK_SUBCOMMAND}"),
-    );
+    let system = realm_with_live_hook(MockSystem::new().with_env("PATH", "/usr/bin").unwrap());
 
     assert_eq!(session_guard(&system, Path::new("/r")), GuardOutcome::Ok);
 }

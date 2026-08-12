@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use assert_cmd::cargo::{CommandCargoExt as _, cargo_bin};
+use remargin_core::permissions::pretool_install::{HOOK_MATCHER, LEGACY_HOOK_COMMAND};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -13,14 +14,39 @@ fn remargin_bin_dir() -> PathBuf {
     bin.parent().unwrap().to_path_buf()
 }
 
-fn run_guard_in(cwd: &Path, path_env: &str) -> Output {
+/// `HOME` is always redirected at a temp dir: the guard reads the
+/// user-scope settings file, so the developer's own install would
+/// otherwise decide the outcome.
+fn run_guard_in(cwd: &Path, home: &Path, path_env: &str) -> Output {
     Command::cargo_bin("remargin")
         .unwrap()
         .current_dir(cwd)
+        .env("HOME", home)
         .env("PATH", path_env)
         .args(["claude", "session-guard"])
         .output()
         .unwrap()
+}
+
+/// Declare the `PreToolUse` entry an install predating absolute binary
+/// paths left behind — the one case whose spawnability rides on `PATH`.
+fn write_path_relative_hook(realm: &Path) {
+    let settings = json!({
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": HOOK_MATCHER,
+                    "hooks": [ { "type": "command", "command": LEGACY_HOOK_COMMAND } ]
+                }
+            ]
+        }
+    });
+    fs::create_dir_all(realm.join(".claude")).unwrap();
+    fs::write(
+        realm.join(".claude/settings.json"),
+        serde_json::to_string_pretty(&settings).unwrap(),
+    )
+    .unwrap();
 }
 
 fn run_args(args: &[&str], cwd: &Path, home: &Path) -> Output {
@@ -40,10 +66,20 @@ fn run_args(args: &[&str], cwd: &Path, home: &Path) -> Output {
 #[test]
 fn guard_with_broken_realm_config_emits_diagnostic() {
     let realm = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    run_args(
+        &["claude", "pretool", "install", "--local"],
+        realm.path(),
+        home.path(),
+    );
     fs::write(realm.path().join(".remargin.yaml"), ": : not valid : :").unwrap();
 
-    // remargin resolves on PATH, so the broken config is the only failure.
-    let out = run_guard_in(realm.path(), remargin_bin_dir().to_str().unwrap());
+    // The hook entry is live, so the broken config is the only failure.
+    let out = run_guard_in(
+        realm.path(),
+        home.path(),
+        remargin_bin_dir().to_str().unwrap(),
+    );
     assert_eq!(
         out.status.code(),
         Some(0_i32),
@@ -72,18 +108,28 @@ fn guard_with_broken_realm_config_emits_diagnostic() {
     );
 }
 
-/// Binary on PATH + a parseable realm config → the session proceeds clean
-/// (exit 0, empty stdout).
+/// A live hook entry + a parseable realm config → the session proceeds
+/// clean (exit 0, empty stdout).
 #[test]
 fn guard_with_valid_config_proceeds_clean() {
     let realm = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    run_args(
+        &["claude", "pretool", "install", "--local"],
+        realm.path(),
+        home.path(),
+    );
     fs::write(
         realm.path().join(".remargin.yaml"),
         "identity: alice\ntype: human\n",
     )
     .unwrap();
 
-    let out = run_guard_in(realm.path(), remargin_bin_dir().to_str().unwrap());
+    let out = run_guard_in(
+        realm.path(),
+        home.path(),
+        remargin_bin_dir().to_str().unwrap(),
+    );
     assert_eq!(out.status.code(), Some(0_i32));
     assert!(
         out.stdout.is_empty(),
@@ -92,16 +138,19 @@ fn guard_with_valid_config_proceeds_clean() {
     );
 }
 
-/// `remargin` absent from PATH → the guard exits 0 but emits a diagnostic
-/// whose `additionalContext` explains the fail-open (exit-127) risk.
+/// A `PATH`-relative entry whose `remargin` is absent from PATH → the
+/// guard exits 0 but emits a diagnostic whose `additionalContext` explains
+/// the fail-open (exit-127) risk.
 #[test]
 fn guard_with_remargin_off_path_emits_diagnostic() {
     let realm = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    write_path_relative_hook(realm.path());
 
     // The binary still runs (assert_cmd invokes it by absolute path), but
     // its PATH lookup for a bare `remargin` finds nothing.
     let empty = TempDir::new().unwrap();
-    let out = run_guard_in(realm.path(), empty.path().to_str().unwrap());
+    let out = run_guard_in(realm.path(), home.path(), empty.path().to_str().unwrap());
     assert_eq!(out.status.code(), Some(0_i32));
     let payload: Value = serde_json::from_slice(&out.stdout).unwrap();
     let ctx = payload["hookSpecificOutput"]["additionalContext"]
@@ -110,6 +159,41 @@ fn guard_with_remargin_off_path_emits_diagnostic() {
     assert!(
         ctx.contains("PATH"),
         "additionalContext should mention PATH: {ctx}",
+    );
+}
+
+/// No `PreToolUse` entry in either settings scope → the guard is loud
+/// (names both scopes and the install command) yet still non-blocking
+/// (exit 0), the same shape the goose guard reports an absent plugin with.
+#[test]
+fn guard_without_any_hook_entry_emits_diagnostic() {
+    let realm = TempDir::new().unwrap();
+    // The diagnostic names the cwd the process reports, which is resolved.
+    let realm_path = fs::canonicalize(realm.path()).unwrap();
+    let home = TempDir::new().unwrap();
+
+    let out = run_guard_in(
+        &realm_path,
+        home.path(),
+        remargin_bin_dir().to_str().unwrap(),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0_i32),
+        "SessionStart guard must exit 0 (it cannot block); stderr: {}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let payload: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let ctx = payload["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    let user_settings = home.path().join(".claude/settings.json");
+    let project_settings = realm_path.join(".claude/settings.json");
+    assert!(
+        ctx.contains(user_settings.to_str().unwrap())
+            && ctx.contains(project_settings.to_str().unwrap())
+            && ctx.contains("remargin claude pretool install"),
+        "additionalContext should name both scopes and the install command: {ctx}",
     );
 }
 

@@ -2,13 +2,13 @@
 //!
 //! Re-verifies that path enforcement will be live for the session:
 //!
-//! 1. the `PreToolUse` hook command that is actually installed can be
-//!    spawned — a command Claude Code cannot find exits 127, which it
-//!    treats as a *non-blocking* failure, and the gated tool call then
-//!    proceeds unprotected, silently. Installs embed an absolute binary
-//!    path, so the probe is that the binary is still on disk; for an entry
-//!    left by an older install, which names the binary by bare name, the
-//!    probe is that `remargin` still resolves on `PATH`;
+//! 1. a `PreToolUse` hook entry is registered at all, and the command it
+//!    names can be spawned — a command Claude Code cannot find exits 127,
+//!    which it treats as a *non-blocking* failure, and the gated tool call
+//!    then proceeds unprotected, silently. Installs embed an absolute
+//!    binary path, so the probe is that the binary is still on disk; for an
+//!    entry left by an older install, which names the binary by bare name,
+//!    the probe is that `remargin` still resolves on `PATH`;
 //! 2. the realm's `.remargin.yaml` above cwd parses — a malformed config
 //!    would surface at tool-call time instead of session start.
 //!
@@ -47,9 +47,8 @@ const BINARY_NAME: &str = "remargin";
 /// scope root — the same file both `install` and `install --local` write.
 const SETTINGS_FILE: &str = ".claude/settings.json";
 
-/// The failure the `PATH` probe reports. Shared by the entry that names the
-/// binary by bare name and by the no-entry fallback, since both come down
-/// to the same lookup.
+/// The failure the `PATH` probe reports for an entry that names the binary
+/// by bare name — the only entry `PATH` decides the fate of.
 const PATH_FAILURE: &str = "the `remargin` binary does not resolve on PATH -- a PreToolUse hook \
                             (`remargin claude pretool`) that cannot find `remargin` exits 127, \
                             which Claude Code treats as non-blocking, so every gated tool call \
@@ -120,10 +119,11 @@ pub fn session_guard(system: &dyn System, cwd: &Path) -> GuardOutcome {
 /// whose absolute binary is on disk — `install --local` is a supported
 /// wiring. An entry that names the binary by bare name is checked the only
 /// way a bare name can be: against `PATH`. A pair of scopes declaring no
-/// entry at all falls back to the same probe, since that is what a hook
-/// command would resolve through if one were there.
+/// entry at all is the loud case: nothing is registered to spawn, so a
+/// `remargin` sitting on `PATH` gates nothing.
 fn hook_failure(system: &dyn System, cwd: &Path) -> Option<String> {
-    let outcomes: Vec<TestOutcome> = settings_files(system, cwd)
+    let files = settings_files(system, cwd);
+    let outcomes: Vec<TestOutcome> = files
         .iter()
         // A probe that cannot answer is not evidence of a live hook, so an
         // unreadable or unparseable settings file reads as broken and
@@ -158,12 +158,27 @@ fn hook_failure(system: &dyn System, cwd: &Path) -> Option<String> {
             ));
         }
     }
-    path_failure(system)
+    Some(no_entry_failure(&files))
 }
 
 /// [`PATH_FAILURE`] when the bare binary does not resolve, else clean.
 fn path_failure(system: &dyn System) -> Option<String> {
     (!remargin_on_path(system)).then(|| String::from(PATH_FAILURE))
+}
+
+/// The failure every scope reporting no entry reports: enforcement was
+/// never wired, so nothing gates a tool call for this session.
+fn no_entry_failure(files: &[PathBuf]) -> String {
+    let scopes = files
+        .iter()
+        .map(|file| file.display().to_string())
+        .collect::<Vec<_>>()
+        .join(" or ");
+    format!(
+        "the PreToolUse hook (`remargin claude pretool`) is not registered in {scopes}, so no hook \
+         gates a tool call for this session -- run `remargin claude pretool install` to register \
+         it"
+    )
 }
 
 /// Both settings files a hook entry can live in: user scope under `$HOME`,
