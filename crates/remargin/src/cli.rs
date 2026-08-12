@@ -619,6 +619,10 @@ pub enum Commands {
         output_args: OutputArgs,
     },
     /// Search across documents for comments.
+    ///
+    /// `comment_count`, `pending_count`, `pending_for`, and
+    /// `last_activity` describe the whole file regardless of filters;
+    /// `comments` and `matched_count` reflect the active filters.
     Query {
         /// Base directory to search.
         #[arg(default_value = ".")]

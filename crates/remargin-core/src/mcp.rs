@@ -772,14 +772,17 @@ fn desc_query() -> ToolDesc {
         name: "query",
         description: "Search across documents for comments. Returns a compact, minified \
              columnar payload: `{base_path, comment_cols, results}`, where each result is \
-             `{path, comment_count, pending_count, pending_for, last_activity, comments}` and \
-             every comment is a positional row named by `comment_cols` \
+             `{path, comment_count, matched_count, pending_count, pending_for, last_activity, \
+             comments}` and every comment is a positional row named by `comment_cols` \
              (`[id, line, author, author_type, ts, reply_to, thread, to, ack, reactions, \
              remargin_kind, edited_at, attachments, content]`, `content` last). Acks compact to \
              `author@ts` strings. The verbose `checksum` / `signature` and the redundant \
              per-comment `file` are dropped; pass `include_integrity: true` to add `checksum`, \
              `signature` columns immediately before `content`. Nullable columns (`reply_to`, \
              `thread`, `remargin_kind`, `edited_at`) are `null` when absent. \
+             `comment_count`, `pending_count`, `pending_for`, and `last_activity` describe the \
+             whole file regardless of filters; `comments` and `matched_count` reflect the active \
+             filters. \
              Pending filters (`pending`, `pending_for`, `pending_for_me`, `pending_broadcast`) \
              compose as a union when more than one is set. `pending` (broad form) includes \
              both directed comments with unacked recipients AND broadcast (no-`to`) comments \

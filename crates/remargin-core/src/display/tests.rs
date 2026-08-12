@@ -603,6 +603,7 @@ fn make_query_result(path: &str, comments: Vec<ExpandedComment>) -> QueryResult 
         comment_count,
         comments: Some(comments),
         last_activity,
+        matched_count: comment_count,
         path: PathBuf::from(path),
         pending_count,
         pending_for: None,

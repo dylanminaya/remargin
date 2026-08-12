@@ -38,7 +38,8 @@ const QUERY = `{
           "checksum": "sha256:abc123", "content": "A test comment mentioning notification.",
           "file": "doc.md", "id": "abc", "line": 16, "reactions": {}, "to": [],
           "ts": "2026-04-06T14:32:00-04:00" } ],
-      "last_activity": "2026-04-06T14:32:00-04:00", "path": "doc.md", "pending_count": 1 } ]
+      "last_activity": "2026-04-06T14:32:00-04:00", "matched_count": 1, "path": "doc.md",
+      "pending_count": 1 } ]
 }`;
 
 const LS = `{

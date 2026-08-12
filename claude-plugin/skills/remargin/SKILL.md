@@ -225,7 +225,7 @@ remargin batch --ops '[
 
 **CLI fallback:** when you must drop to the CLI (MCP unreachable), pass **`--json --compact`** to `remargin get` to obtain the same shape. Plain `remargin get --json` is the older verbose payload (`{line, text}` objects, six-column links) — only use it if a caller explicitly needs the legacy shape.
 
-**`query` returns a compact, minified payload too.** The MCP `query` tool always returns the token-lean columnar shape (no format flag): `{base_path, comment_cols, results}`, each result `{path, comment_count, pending_count, pending_for, last_activity, comments}`.
+**`query` returns a compact, minified payload too.** The MCP `query` tool always returns the token-lean columnar shape (no format flag): `{base_path, comment_cols, results}`, each result `{path, comment_count, matched_count, pending_count, pending_for, last_activity, comments}`. `comment_count`, `pending_count`, `pending_for`, and `last_activity` describe the whole file regardless of filters; `comments` and `matched_count` reflect the active filters.
 
 - `comments` rows are positional arrays named once by the envelope's `comment_cols` = `["id", "line", "author", "author_type", "ts", "reply_to", "thread", "to", "ack", "reactions", "remargin_kind", "edited_at", "attachments", "content"]` (`content` last). Acks are `author@ts` strings; the verbose `checksum` / `signature` and the redundant per-comment `file` are dropped. Nullable columns (`reply_to`, `thread`, `remargin_kind`, `edited_at`) are `null` when absent.
 - Pass `include_integrity: true` (MCP) / `--include-integrity` (CLI, requires `--compact`) to add `checksum`, `signature` columns immediately before `content`.

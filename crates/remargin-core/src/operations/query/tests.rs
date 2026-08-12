@@ -1112,6 +1112,7 @@ fn query_result_json_shape_matches_schema() {
     for key in [
         "comment_count",
         "comments",
+        "matched_count",
         "path",
         "pending_count",
         "pending_for",
@@ -1963,4 +1964,107 @@ fn display_base_path_directory_renders_argument() {
     assert_eq!(display_base_path("notes/", false), "notes/");
     assert_eq!(display_base_path(".", false), "./");
     assert_eq!(display_base_path("", false), "./");
+}
+
+// Scope contract: the summary counts stay file-wide under a comment-level
+// filter; only `comments` and `matched_count` narrow to the matches.
+#[test]
+fn matched_count_reports_the_filtered_subset() {
+    let system = setup_expanded_system();
+    let filter = QueryFilter {
+        expanded: true,
+        pending_for: Some(String::from("alice")),
+        ..QueryFilter::default()
+    };
+
+    let results = query(&system, Path::new("/exp/review.md"), &filter).unwrap();
+    assert_eq!(results.len(), 1);
+    let review = &results[0];
+    assert_eq!(review.comment_count, 3);
+    assert_eq!(review.matched_count, 1);
+    assert_eq!(review.comments.as_ref().unwrap().len(), 1);
+    assert_eq!(review.comments.as_ref().unwrap()[0].id, "c2");
+}
+
+#[test]
+fn matched_count_equals_comment_count_without_filters() {
+    let system = setup_expanded_system();
+    let filter = QueryFilter {
+        expanded: true,
+        ..QueryFilter::default()
+    };
+
+    let results = query(&system, Path::new("/exp"), &filter).unwrap();
+    assert_eq!(results.len(), 2);
+    for r in &results {
+        assert_eq!(r.matched_count, r.comment_count);
+    }
+}
+
+#[test]
+fn summary_mode_reports_matched_count_without_comments() {
+    let system = setup_expanded_system();
+    let filter = QueryFilter {
+        author: Some(String::from("bob")),
+        summary: true,
+        ..QueryFilter::default()
+    };
+
+    let results = query(&system, Path::new("/exp"), &filter).unwrap();
+    assert_eq!(results.len(), 1);
+    let review = &results[0];
+    assert!(review.comments.is_none());
+    assert_eq!(review.comment_count, 3);
+    assert_eq!(review.matched_count, 1);
+}
+
+/// Combined filters the file-level gates each pass but no single comment
+/// satisfies together: bob authored c2, and c3 is the only comment after
+/// the cutoff.
+fn zero_match_filter() -> QueryFilter {
+    QueryFilter {
+        author: Some(String::from("bob")),
+        since: Some(chrono::DateTime::parse_from_rfc3339("2026-04-06T13:00:00-04:00").unwrap()),
+        ..QueryFilter::default()
+    }
+}
+
+#[test]
+fn summary_mode_lists_file_with_zero_matches() {
+    let system = setup_expanded_system();
+    let filter = QueryFilter {
+        summary: true,
+        ..zero_match_filter()
+    };
+
+    let results = query(&system, Path::new("/exp"), &filter).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].comment_count, 3);
+    assert_eq!(results[0].matched_count, 0);
+}
+
+#[test]
+fn non_summary_zero_matches_skips_file() {
+    let system = setup_expanded_system();
+
+    let results = query(&system, Path::new("/exp"), &zero_match_filter()).unwrap();
+    assert!(results.is_empty());
+}
+
+#[test]
+fn compact_result_carries_matched_count() {
+    use crate::operations::query::to_compact_result;
+
+    let system = setup_expanded_system();
+    let filter = QueryFilter {
+        expanded: true,
+        pending_for: Some(String::from("alice")),
+        ..QueryFilter::default()
+    };
+    let results = query(&system, Path::new("/exp/review.md"), &filter).unwrap();
+
+    let compact = to_compact_result(&results[0], false);
+    assert_eq!(compact["comment_count"].as_u64().unwrap(), 3);
+    assert_eq!(compact["matched_count"].as_u64().unwrap(), 1);
+    assert_eq!(compact["comments"].as_array().unwrap().len(), 1);
 }

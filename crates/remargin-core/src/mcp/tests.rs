@@ -2649,6 +2649,42 @@ fn mcp_query_expanded_returns_comments() {
     assert!(acks[0].as_str().unwrap().contains('@'));
 }
 
+// Scope contract, MCP side: a comment-level filter narrows `comments` and
+// `matched_count` while the summary counts keep describing the whole file.
+#[test]
+fn mcp_query_reports_matched_count_beside_file_wide_counts() {
+    let base = Path::new("/docs");
+    let system = MockSystem::new()
+        .with_file(Path::new("/docs/a.md"), DOC_EXPANDED.as_bytes())
+        .unwrap();
+    let config = test_config();
+
+    let response = call(
+        &system,
+        base,
+        &config,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1_i32,
+            "method": "tools/call",
+            "params": {
+                "name": "query",
+                "arguments": { "expanded": true, "pending": true }
+            }
+        }),
+    );
+
+    let result = extract_tool_text(&response);
+    let results = result["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1_usize);
+    // ex1 is pending; ex2 is acked.
+    assert_eq!(results[0]["comment_count"].as_u64().unwrap(), 2_u64);
+    assert_eq!(results[0]["matched_count"].as_u64().unwrap(), 1_u64);
+    let comments = results[0]["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 1_usize);
+    assert_eq!(comments[0][0].as_str().unwrap(), "ex1");
+}
+
 #[test]
 fn mcp_query_compact_include_integrity_widens_rows() {
     let base = Path::new("/docs");

@@ -970,7 +970,7 @@ Returns a projection of any mutating op (`ack`, `batch`, `comment`, `cp`, `delet
 
 `remargin query ... --json --compact` emits the same token-lean, minified variant of the `query` payload the MCP `query` tool returns unconditionally. Plain `--json` is unchanged (verbose `ExpandedComment` objects).
 
-- Shape: `{base_path, comment_cols, results}`, where each result is `{path, comment_count, pending_count, pending_for, last_activity, comments}`.
+- Shape: `{base_path, comment_cols, results}`, where each result is `{path, comment_count, matched_count, pending_count, pending_for, last_activity, comments}`. `comment_count`, `pending_count`, `pending_for`, and `last_activity` describe the whole file regardless of filters; `comments` and `matched_count` reflect the active filters.
 - **`comments`** rows are positional arrays named once by the envelope's `comment_cols` header: `["id", "line", "author", "author_type", "ts", "reply_to", "thread", "to", "ack", "reactions", "remargin_kind", "edited_at", "attachments", "content"]` (`content` last). Acks compact to `author@ts` strings; the verbose per-comment `checksum` / `signature` and the redundant `file` are dropped. Nullable columns (`reply_to`, `thread`, `remargin_kind`, `edited_at`) are `null` when absent.
 - **`--include-integrity`** (requires `--compact`) re-adds `checksum`, `signature` as columns immediately before `content`, widening both `comment_cols` and every row. On the MCP surface this is the `include_integrity: true` boolean.
 

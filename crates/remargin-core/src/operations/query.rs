@@ -290,6 +290,9 @@ pub struct QueryResult {
     /// Most recent activity timestamp.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_activity: Option<DateTime<FixedOffset>>,
+    /// Number of comments matching the active filters; equals
+    /// `comment_count` when no comment-level filter is set.
+    pub matched_count: u32,
     /// Relative path to the document.
     pub path: PathBuf,
     /// Number of pending (unacked) comments.
@@ -343,6 +346,9 @@ pub struct CompactQueryResult {
     pub comments: Option<Vec<CompactCommentRow>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_activity: Option<DateTime<FixedOffset>>,
+    /// Number of comments matching the active filters; equals
+    /// `comment_count` when no comment-level filter is set.
+    pub matched_count: u32,
     pub path: PathBuf,
     pub pending_count: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -425,6 +431,7 @@ pub fn to_compact_result(result: &QueryResult, include_integrity: bool) -> Value
     let mut obj = serde_json::Map::new();
     obj.insert(String::from("path"), json!(result.path));
     obj.insert(String::from("comment_count"), json!(result.comment_count));
+    obj.insert(String::from("matched_count"), json!(result.matched_count));
     obj.insert(String::from("pending_count"), json!(result.pending_count));
     if let Some(pending_for) = &result.pending_for {
         obj.insert(String::from("pending_for"), json!(pending_for));
@@ -562,18 +569,27 @@ fn process_document(
         }
     }
 
+    // Both the count and the rows derive from this one pass, so they can
+    // never disagree about what "matched" means.
+    let matched: Vec<&&parser::Comment> = comments
+        .iter()
+        .filter(|cm| comment_matches_filters(cm, filter))
+        .collect();
+    let matched_count = u32::try_from(matched.len()).unwrap_or(u32::MAX);
+
     // Collect expanded comments unless summary-only mode is requested.
     // When `expanded` is true OR `summary` is false, include comment data.
     let include_comments = !filter.summary || filter.expanded;
     let expanded_comments = include_comments.then(|| {
-        comments
+        matched
             .iter()
-            .filter(|cm| comment_matches_filters(cm, filter))
             .map(|cm| expanded_from_comment(cm, relative))
             .collect::<Vec<ExpandedComment>>()
     });
-    // Empty match list means no matches — skip the file entirely.
-    if matches!(&expanded_comments, Some(v) if v.is_empty()) {
+    // Empty match list means no matches — skip the file entirely. Summary
+    // mode keeps listing the file (it passed the file-level gates) and
+    // reports `matched_count: 0`.
+    if include_comments && matched.is_empty() {
         return None;
     }
 
@@ -581,6 +597,7 @@ fn process_document(
         comment_count,
         comments: expanded_comments,
         last_activity,
+        matched_count,
         path: relative.to_path_buf(),
         pending_count,
         pending_for: (!pending_for.is_empty()).then_some(pending_for),
