@@ -104,7 +104,11 @@ pub fn format_comments_pretty(file_path: &str, comments: &[&Comment]) -> String 
     let total = comments.len();
     let pending = count_pending(comments);
     let _ = writeln!(out, "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
-    let _ = write!(out, "{total} comments \u{00b7} {pending} pending");
+    let _ = write!(
+        out,
+        "{} \u{00b7} {pending} pending",
+        plural(total, "comment")
+    );
 
     out
 }

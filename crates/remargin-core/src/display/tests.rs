@@ -432,6 +432,15 @@ fn render_empty_footer() {
 }
 
 #[test]
+fn render_single_comment_footer() {
+    let cm = build_comment(TestComment::default());
+    let comments: Vec<&Comment> = vec![&cm];
+    let output = format_comments_pretty("file.md", &comments);
+
+    assert!(output.contains("1 comment \u{00b7} 1 pending"));
+}
+
+#[test]
 fn render_no_pending() {
     let ack1 = make_ack("alice", "2026-04-06T15:00:00-04:00");
     let cm1 = build_comment(TestComment {
