@@ -450,7 +450,10 @@ fn desc_doctor() -> ToolDesc {
                     "type": "string",
                     "description": "Comma-separated check names to run (default: all). \
                                     e.g. \"hook,trusted-root-escape\". The hook-installed \
-                                    gate always runs regardless of this selection."
+                                    gate always runs regardless of this selection and still \
+                                    skips every later check when the hook is missing, but a \
+                                    hook_missing finding is reported only when \"hook\" is \
+                                    selected."
                 },
                 "user_settings_file": {
                     "type": "string",

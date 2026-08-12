@@ -339,8 +339,9 @@ pub enum Commands {
         #[arg(long)]
         user_settings: Option<PathBuf>,
         /// Comma-separated checks to run (e.g. `hook,trusted-root-escape`).
-        /// Runs every check by default. The hook-installed gate always runs,
-        /// so a missing hook is reported even when `hook` is not in the set.
+        /// Runs every check by default. The hook-installed gate always runs
+        /// and still skips every later check when the hook is missing, but a
+        /// missing hook is only reported when `hook` is in the set.
         #[arg(long, value_name = "SET")]
         check: Option<String>,
         /// Emit an agent-executable repair prompt instead of the

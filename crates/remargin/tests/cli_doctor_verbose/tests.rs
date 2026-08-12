@@ -481,6 +481,44 @@ fn check_scopes_run_to_selected() {
     );
 }
 
+/// On a realm with no `PreToolUse` hook, `--check session-guard` exits 0
+/// with no findings — the gate still short-circuits (`hook_installed` is
+/// `false` and the guard check never runs), it just says nothing about a
+/// check the caller did not select. Selecting `hook` reports the gate.
+#[test]
+fn check_scoped_run_on_hookless_realm_is_silent() {
+    let realm = TempDir::new().unwrap();
+    let user_settings = realm.path().join("settings.json");
+    fs::write(&user_settings, json!({}).to_string()).unwrap();
+
+    let scoped = run_doctor_with_settings(
+        realm.path(),
+        &user_settings,
+        &["--check", "session-guard", "--json"],
+    );
+    assert_status(&scoped, 0);
+    assert!(
+        finding_kinds(stdout_of(&scoped)).is_empty(),
+        "deselected gate reports nothing: {}",
+        stdout_of(&scoped),
+    );
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&scoped)).unwrap();
+    assert_eq!(
+        report["hook_installed"],
+        json!(false),
+        "the gate still ran: {report}",
+    );
+
+    let selected =
+        run_doctor_with_settings(realm.path(), &user_settings, &["--check", "hook", "--json"]);
+    assert_status(&selected, 1);
+    assert_eq!(
+        finding_kinds(stdout_of(&selected)),
+        vec![String::from("hook_missing")],
+        "selecting hook reports the gate finding",
+    );
+}
+
 /// An unknown `--check` name is a hard CLI error naming the bad slug and
 /// listing the valid ones — never a silent empty run.
 #[test]

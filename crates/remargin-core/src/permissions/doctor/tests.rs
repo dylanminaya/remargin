@@ -1681,11 +1681,13 @@ fn unknown_check_name_errors_and_lists_valid() {
     );
 }
 
-/// Scenario 5: the hook-installed gate runs regardless of selection. With
-/// the hook absent from both scopes and `hook` NOT in the selected set, the
-/// report still short-circuits with a single leading `HookMissing`.
+/// Scenario 5: the hook-installed gate runs regardless of selection, but
+/// its finding follows the selection like every other check. With the hook
+/// absent from both scopes and `hook` NOT selected, the run short-circuits
+/// — `hook_installed` is `false` and the deselected `session-guard` check
+/// contributes nothing — while no `HookMissing` finding is reported.
 #[test]
-fn hook_gate_runs_even_when_deselected() {
+fn hook_gate_short_circuits_silently_when_deselected() {
     let system = mock_with_files(&[]);
     let mut checks = HashSet::new();
     checks.insert(CheckName::SessionGuard);
@@ -1699,8 +1701,29 @@ fn hook_gate_runs_even_when_deselected() {
     assert!(!report.hook_installed, "hook is absent: {report:#?}");
     assert_eq!(
         kinds(&report),
+        Vec::new(),
+        "a deselected hook reports nothing, and the gate still skips every later check: \
+         {report:#?}",
+    );
+}
+
+/// The same hookless realm with `hook` selected reports the gate finding
+/// and nothing else — the short-circuit is unchanged by the selection.
+#[test]
+fn hook_gate_reports_when_selected() {
+    let system = mock_with_files(&[]);
+    let report = super::run_doctor(
+        &system,
+        Path::new("/r"),
+        Path::new("/home/u/.claude/settings.json"),
+        &CheckName::parse_set("hook,session-guard").unwrap(),
+    )
+    .unwrap();
+    assert!(!report.hook_installed, "hook is absent: {report:#?}");
+    assert_eq!(
+        kinds(&report),
         vec![FindingKind::HookMissing],
-        "gate short-circuits with HookMissing despite hook being deselected: {report:#?}",
+        "the selected gate finding leads and short-circuits: {report:#?}",
     );
 }
 

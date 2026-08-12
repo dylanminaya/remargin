@@ -4,8 +4,8 @@
 //! The hook-installed check runs first and is a gate: when the
 //! `PreToolUse` hook is absent from both settings files, no other check
 //! can provide meaningful signal (the hook is the single source of
-//! truth for enforcement), so the report leads with `HookMissing` and
-//! subsequent checks are skipped.
+//! truth for enforcement), so subsequent checks are skipped and the
+//! report leads with `HookMissing` whenever that check is selected.
 //!
 //! Pure (no stdout/stdin): the CLI / MCP handlers own I/O.
 
@@ -567,11 +567,13 @@ impl CheckName {
 /// Run the checks in `checks` against the realm at `cwd`.
 ///
 /// `checks` selects which checks contribute findings ([`CheckName::all`]
-/// runs every one — the default). The hook-installed gate is exempt: it
-/// runs regardless of selection, and when the `PreToolUse` hook is absent
-/// from both `user_settings_file` and `project_settings_file` it emits a
-/// `HookMissing` finding and short-circuits — a scoped run that skipped the
-/// gate would report a false-clean, so the gate is never selectable-off.
+/// runs every one — the default). The hook-installed gate itself is exempt:
+/// it runs regardless of selection, and when the `PreToolUse` hook is
+/// absent from both `user_settings_file` and `project_settings_file` it
+/// short-circuits so no later check can report a false-clean. Its
+/// `HookMissing` finding follows the selection like every other check, so a
+/// run that did not select `Hook` short-circuits silently — callers
+/// scripting the gate must select it.
 ///
 /// Two config-safety preconditions are always computed even when their own
 /// findings are deselected: `find_trusted_root_escapes` (an out-of-realm
@@ -608,11 +610,13 @@ pub fn run_doctor(
     let mut findings: Vec<DoctorFinding> = Vec::new();
 
     if !hook_installed {
-        findings.push(hook_missing_finding(
-            user_settings_file,
-            &project_settings_file,
-            claude.hook_fault(),
-        ));
+        if checks.contains(&CheckName::Hook) {
+            findings.push(hook_missing_finding(
+                user_settings_file,
+                &project_settings_file,
+                claude.hook_fault(),
+            ));
+        }
         // Short-circuit: no further checks are meaningful without the hook.
         return Ok(DoctorReport {
             findings,
