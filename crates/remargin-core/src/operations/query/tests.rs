@@ -1940,3 +1940,27 @@ fn compact_comment_row_schema_renders_nullable_columns() {
         "payload Zod references row schema: {payload_zod}"
     );
 }
+
+// Envelope contract: `base_path` is the join root for every result path,
+// so a file argument must render its parent directory.
+#[test]
+fn display_base_path_file_renders_parent_directory() {
+    use crate::operations::query::display_base_path;
+
+    assert_eq!(
+        display_base_path("notes/generated_types.md", true),
+        "notes/"
+    );
+    assert_eq!(display_base_path("generated_types.md", true), "./");
+    assert_eq!(display_base_path("a/b/c.md", true), "a/b/");
+}
+
+#[test]
+fn display_base_path_directory_renders_argument() {
+    use crate::operations::query::display_base_path;
+
+    assert_eq!(display_base_path("notes", false), "notes/");
+    assert_eq!(display_base_path("notes/", false), "notes/");
+    assert_eq!(display_base_path(".", false), "./");
+    assert_eq!(display_base_path("", false), "./");
+}

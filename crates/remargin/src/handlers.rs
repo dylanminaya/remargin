@@ -2134,8 +2134,9 @@ pub fn cmd_query(
 ) -> Result<()> {
     let target = cwd.join(expand_cli_path(system, params.path)?);
     let filter = build_query_filter(config, params)?;
+    let base_path = query::display_base_path(params.path, system.is_file(&target).unwrap_or(false));
     let results = query::query(system, &target, &filter)?;
-    render::render_query_output(sinks, &results, params, filter.pending_label())
+    render::render_query_output(sinks, &results, params, &base_path, filter.pending_label())
 }
 
 fn build_query_filter(

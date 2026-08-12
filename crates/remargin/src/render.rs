@@ -167,10 +167,13 @@ pub fn emit_plan_unprotect_text(
     out_raw(sinks, &plan_ops::render_plan_unprotect_text(report))
 }
 
+/// `base_path` is resolved by the caller, which has the [`os_shim::System`]
+/// needed to tell a file argument from a directory one.
 pub fn render_query_output(
     sinks: &mut IoSinks<'_>,
     results: &[query::QueryResult],
     params: &QueryParams<'_>,
+    base_path: &str,
     pending_label: Option<&str>,
 ) -> Result<()> {
     match params.output {
@@ -184,7 +187,7 @@ pub fn render_query_output(
             return out_json_min(
                 sinks,
                 &json!({
-                    "base_path": format!("{}/", params.path.trim_end_matches('/')),
+                    "base_path": base_path,
                     "comment_cols": query::comment_cols(include_integrity),
                     "results": compact,
                 }),
@@ -195,7 +198,7 @@ pub fn render_query_output(
                 sinks,
                 true,
                 &json!({
-                    "base_path": format!("{}/", params.path.trim_end_matches('/')),
+                    "base_path": base_path,
                     "results": results,
                 }),
             );

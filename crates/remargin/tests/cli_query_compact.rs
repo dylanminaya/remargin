@@ -2,7 +2,8 @@
 //!
 //! Proves the compact columnar payload (matching the MCP `query` contract)
 //! is emitted minified, that `--include-integrity` widens the rows, that
-//! the verbose `--json` payload stays unchanged, and that the clap
+//! the verbose `--json` payload stays unchanged, that `base_path` joined
+//! with a result path reconstructs the queried file, and that the clap
 //! `requires` chain (`--include-integrity` -> `--compact` -> `--json`) is
 //! enforced.
 

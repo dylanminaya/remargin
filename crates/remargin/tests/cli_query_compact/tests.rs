@@ -189,3 +189,76 @@ fn query_compact_requires_json() {
         "clap requires error must name --json: {stderr}"
     );
 }
+
+/// A realm holding the same document at the root and one level down, so a
+/// file argument can be checked with and without a parent directory.
+fn setup_nested() -> (TempDir, PathBuf) {
+    let (tmp, cwd) = setup();
+    fs::create_dir_all(cwd.join("notes")).unwrap();
+    fs::write(cwd.join("notes/nested.md"), DOC).unwrap();
+    (tmp, cwd)
+}
+
+fn base_path_of(payload: &Value) -> &str {
+    payload["base_path"].as_str().unwrap()
+}
+
+/// Regression: `base_path` is the join root, so a file argument renders
+/// its parent directory — not the file itself, which made the join name
+/// the file twice.
+#[test]
+fn query_compact_file_base_path_is_parent_directory() {
+    let (_tmp, cwd) = setup_nested();
+    let out = run(&cwd, &["query", "notes/nested.md", "--json", "--compact"]);
+    assert!(out.status.success(), "command failed: {out:?}");
+
+    let payload: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(base_path_of(&payload), "notes/");
+
+    let results = payload["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    let joined = PathBuf::from(base_path_of(&payload)).join(results[0]["path"].as_str().unwrap());
+    assert_eq!(joined, PathBuf::from("notes/nested.md"));
+    assert!(cwd.join(&joined).is_file(), "join must exist: {joined:?}");
+}
+
+#[test]
+fn query_compact_root_file_base_path_is_dot() {
+    let (_tmp, cwd) = setup();
+    let out = run(&cwd, &["query", "doc.md", "--json", "--compact"]);
+    assert!(out.status.success(), "command failed: {out:?}");
+
+    let payload: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(base_path_of(&payload), "./");
+
+    let results = payload["results"].as_array().unwrap();
+    let joined = PathBuf::from(base_path_of(&payload)).join(results[0]["path"].as_str().unwrap());
+    assert!(cwd.join(&joined).is_file(), "join must exist: {joined:?}");
+}
+
+#[test]
+fn query_verbose_json_file_base_path_is_parent_directory() {
+    let (_tmp, cwd) = setup_nested();
+    let out = run(&cwd, &["query", "notes/nested.md", "--json"]);
+    assert!(out.status.success(), "command failed: {out:?}");
+
+    let payload: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(base_path_of(&payload), "notes/");
+}
+
+#[test]
+fn query_directory_base_path_is_the_argument() {
+    let (_tmp, cwd) = setup_nested();
+    let cases: [(&[&str], &str); 4] = [
+        (&["query", ".", "--json", "--compact"], "./"),
+        (&["query", ".", "--json"], "./"),
+        (&["query", "notes", "--json", "--compact"], "notes/"),
+        (&["query", "notes/", "--json", "--compact"], "notes/"),
+    ];
+    for (args, expected) in cases {
+        let out = run(&cwd, args);
+        assert!(out.status.success(), "command failed: {out:?}");
+        let payload: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(base_path_of(&payload), expected, "args: {args:?}");
+    }
+}

@@ -2508,7 +2508,9 @@ fn handle_query(
     let path_str = optional_str(params, "path").unwrap_or(".");
     let include_integrity = optional_bool(params, "include_integrity");
     let filter = build_query_filter_from_params(params, config.identity.clone())?;
-    let results = query::query(system, &base_dir.join(path_str), &filter)?;
+    let target = base_dir.join(path_str);
+    let is_file = system.is_file(&target).unwrap_or(false);
+    let results = query::query(system, &target, &filter)?;
 
     // Compact columnar shape, hardcoded on the MCP surface: comments become
     // positional rows named by `comment_cols`, dropping checksum / signature
@@ -2518,7 +2520,7 @@ fn handle_query(
         .map(|result| query::to_compact_result(result, include_integrity))
         .collect();
     Ok(json!({
-        "base_path": format!("{}/", path_str.trim_end_matches('/')),
+        "base_path": query::display_base_path(path_str, is_file),
         "comment_cols": query::comment_cols(include_integrity),
         "results": compact,
     }))

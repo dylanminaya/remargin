@@ -2497,6 +2497,83 @@ fn mcp_query_comment_id_not_found_returns_empty() {
     assert!(results.is_empty());
 }
 
+fn query_base_path(system: &MockSystem, base: &Path, path: &str) -> String {
+    let response = call(
+        system,
+        base,
+        &test_config(),
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1_i32,
+            "method": "tools/call",
+            "params": {
+                "name": "query",
+                "arguments": { "path": path }
+            }
+        }),
+    );
+    String::from(extract_tool_text(&response)["base_path"].as_str().unwrap())
+}
+
+/// Regression: `base_path` is the join root for every result path, so a
+/// file argument renders its parent directory, never the file itself.
+#[test]
+fn mcp_query_file_base_path_is_parent_directory() {
+    let base = Path::new("/docs");
+    let system = MockSystem::new()
+        .with_dir(Path::new("/docs/notes"))
+        .unwrap()
+        .with_file(
+            Path::new("/docs/notes/nested.md"),
+            DOC_WITH_COMMENT.as_bytes(),
+        )
+        .unwrap()
+        .with_file(Path::new("/docs/root.md"), DOC_WITH_COMMENT.as_bytes())
+        .unwrap();
+
+    assert_eq!(query_base_path(&system, base, "notes/nested.md"), "notes/");
+    assert_eq!(query_base_path(&system, base, "root.md"), "./");
+    assert_eq!(query_base_path(&system, base, "notes"), "notes/");
+    assert_eq!(query_base_path(&system, base, "."), "./");
+}
+
+#[test]
+fn mcp_query_file_base_path_joins_to_result_path() {
+    let base = Path::new("/docs");
+    let system = MockSystem::new()
+        .with_dir(Path::new("/docs/notes"))
+        .unwrap()
+        .with_file(
+            Path::new("/docs/notes/nested.md"),
+            DOC_WITH_COMMENT.as_bytes(),
+        )
+        .unwrap();
+    let config = test_config();
+
+    let response = call(
+        &system,
+        base,
+        &config,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1_i32,
+            "method": "tools/call",
+            "params": {
+                "name": "query",
+                "arguments": { "path": "notes/nested.md" }
+            }
+        }),
+    );
+
+    let result = extract_tool_text(&response);
+    let base_path = result["base_path"].as_str().unwrap();
+    let results = result["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1_usize);
+    let joined = Path::new(base_path).join(results[0]["path"].as_str().unwrap());
+    assert_eq!(joined, Path::new("notes/nested.md"));
+    assert!(system.is_file(&base.join(&joined)).unwrap());
+}
+
 #[test]
 fn mcp_query_expanded_returns_comments() {
     let base = Path::new("/docs");

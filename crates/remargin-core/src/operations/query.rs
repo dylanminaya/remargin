@@ -360,6 +360,29 @@ pub const fn comment_cols(include_integrity: bool) -> &'static [&'static str] {
     }
 }
 
+/// Render the envelope `base_path` for a query argument: the argument
+/// itself for a directory, its parent for a file. Always ends in `/`; an
+/// empty parent renders as `./`.
+///
+/// A file argument yields a filename-only result path (see [`query`]), so
+/// only the parent makes `base_path` ⊕ `path` reconstruct the real path.
+#[must_use]
+pub fn display_base_path(raw: &str, is_file: bool) -> String {
+    let trimmed = raw.trim_end_matches('/');
+    let base = if is_file {
+        Path::new(trimmed)
+            .parent()
+            .map_or("", |parent| parent.to_str().unwrap_or(""))
+    } else {
+        trimmed
+    };
+    if base.is_empty() {
+        String::from("./")
+    } else {
+        format!("{base}/")
+    }
+}
+
 /// Project one verbose [`ExpandedComment`] onto its compact positional row.
 ///
 /// `checksum` / `signature` are added before `content` only when
