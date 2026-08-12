@@ -2159,3 +2159,26 @@ fn plain_summary_header_names_both_counts_under_a_filter() {
     let output = render_query_plain(&results);
     assert_eq!(output, "review.md (1 of 3 comments, 2 pending)\n");
 }
+
+#[test]
+fn comment_count_pluralizes_the_noun() {
+    use crate::operations::query::format_comment_count;
+
+    assert_eq!(format_comment_count(0, 0), "0 comments");
+    assert_eq!(format_comment_count(1, 1), "1 comment");
+    assert_eq!(format_comment_count(2, 2), "2 comments");
+    assert_eq!(format_comment_count(1, 190), "1 of 190 comments");
+}
+
+#[test]
+fn plain_header_says_one_comment_for_a_single_comment_file() {
+    let system = setup_system();
+    let filter = QueryFilter {
+        summary: true,
+        ..QueryFilter::default()
+    };
+    let results = query(&system, Path::new("/project/docs/pending.md"), &filter).unwrap();
+
+    let output = render_query_plain(&results);
+    assert_eq!(output, "pending.md (1 comment, 1 pending)\n");
+}

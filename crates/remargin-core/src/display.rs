@@ -8,7 +8,7 @@ use std::path::Path;
 
 use crate::activity::{ActivityResult, Change};
 use crate::config::identity::IdentityReport;
-use crate::operations::query::{ExpandedComment, QueryResult, format_comment_count};
+use crate::operations::query::{ExpandedComment, QueryResult, format_comment_count, plural};
 use crate::parser::{self, Comment};
 use crate::reactions::ReactionsExt as _;
 
@@ -223,9 +223,10 @@ pub fn format_query_pretty(results: &[QueryResult], filter_name: Option<&str>) -
     }
 
     let grand_pending_label = format_pending_label(total_pending, filter_name);
+    let file_label = plural(file_count, "file");
     let _ = write!(
         out,
-        "\n\n\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\n{grand_pending_label} across {file_count} files"
+        "\n\n\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\n{grand_pending_label} across {file_label}"
     );
 
     out

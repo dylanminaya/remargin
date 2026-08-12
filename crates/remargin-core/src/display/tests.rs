@@ -626,13 +626,13 @@ fn query_pretty_single_file() {
 
     // a broadcast (empty `to`) with no acks counts as
     // pending, so "1 pending" here (one broadcast, unacked).
-    assert!(output.contains("docs/design.md (1 comments, 1 pending)"));
+    assert!(output.contains("docs/design.md (1 comment, 1 pending)"));
     assert!(output.contains("docs/design.md:10"));
     assert!(output.contains("abc \u{00b7} eduardo (human) \u{00b7} 2026-04-06 14:00"));
     assert!(output.contains("\u{2502} Fix this bug."));
     // Grand footer.
     assert!(output.contains("\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}"));
-    assert!(output.contains("1 pending across 1 files"));
+    assert!(output.contains("1 pending across 1 file"));
 }
 
 #[test]
@@ -684,8 +684,8 @@ fn query_pretty_multi_file() {
     // Pass in non-alphabetical order; output should sort alphabetically.
     let output = format_query_pretty(&[result_b, result_a], None);
 
-    let pos_a = output.find("src/a.md (1 comments").unwrap();
-    let pos_b = output.find("src/b.md (1 comments").unwrap();
+    let pos_a = output.find("src/a.md (1 comment,").unwrap();
+    let pos_b = output.find("src/b.md (1 comment,").unwrap();
     assert!(pos_a < pos_b, "Files should be sorted alphabetically");
     // broadcasts with no acks count as pending.
     assert!(output.contains("2 pending across 2 files"));
@@ -710,9 +710,9 @@ fn query_pretty_pending_for() {
 
     assert!(output.contains("1 pending for alice"));
     // Per-file header also uses the filter name.
-    assert!(output.contains("design.md (1 comments, 1 pending for alice)"));
+    assert!(output.contains("design.md (1 comment, 1 pending for alice)"));
     // Grand footer.
-    assert!(output.contains("1 pending for alice across 1 files"));
+    assert!(output.contains("1 pending for alice across 1 file"));
 }
 
 #[test]

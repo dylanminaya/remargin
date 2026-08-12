@@ -753,16 +753,28 @@ pub fn resolve_comment_id(
     Ok(matches)
 }
 
+/// Render `count` followed by `noun`, singular only at exactly one.
+///
+/// Naive `-s` suffixing: the text surfaces only count regular nouns.
+pub(crate) fn plural(count: usize, noun: &str) -> String {
+    if count == 1 {
+        format!("{count} {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
+}
+
 /// Render the comment-count phrase of a result header.
 ///
 /// Reads `{matched} of {total} comments` when a comment-level filter
 /// narrowed the set, `{total} comments` otherwise. Shared with the
 /// pretty printer so both text surfaces say the same thing.
 pub(crate) fn format_comment_count(matched: u32, total: u32) -> String {
+    let counted = plural(total as usize, "comment");
     if matched == total {
-        format!("{total} comments")
+        counted
     } else {
-        format!("{matched} of {total} comments")
+        format!("{matched} of {counted}")
     }
 }
 
