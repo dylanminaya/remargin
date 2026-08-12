@@ -636,6 +636,29 @@ fn query_pretty_single_file() {
 }
 
 #[test]
+fn query_pretty_header_names_both_counts_under_a_filter() {
+    let cm = make_expanded(
+        "abc",
+        "eduardo",
+        AuthorType::Human,
+        10,
+        "Fix this bug.",
+        "2026-04-06T14:00:00-04:00",
+        "docs/design.md",
+    );
+    let mut result = make_query_result("docs/design.md", vec![cm]);
+    // A comment-level filter kept one of the file's 190 comments.
+    result.comment_count = 190;
+
+    let output = format_query_pretty(&[result], Some("alice"));
+
+    assert!(
+        output.contains("docs/design.md (1 of 190 comments, 1 pending for alice)"),
+        "pretty header should name matched and file-wide counts, was:\n{output}"
+    );
+}
+
+#[test]
 fn query_pretty_multi_file() {
     let cm1 = make_expanded(
         "aaa",

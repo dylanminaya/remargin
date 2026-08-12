@@ -4,7 +4,9 @@ use std::path::Path;
 
 use os_shim::mock::MockSystem;
 
-use crate::operations::query::{QueryFilter, query, resolve_comment_id, to_compact_row};
+use crate::operations::query::{
+    QueryFilter, query, render_query_plain, resolve_comment_id, to_compact_row,
+};
 use crate::parser::AuthorType;
 
 fn doc_with_pending() -> &'static str {
@@ -2109,4 +2111,51 @@ fn compact_result_carries_matched_count() {
     assert_eq!(compact["comment_count"].as_u64().unwrap(), 3);
     assert_eq!(compact["matched_count"].as_u64().unwrap(), 1);
     assert_eq!(compact["comments"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn plain_header_names_both_counts_under_a_filter() {
+    let system = setup_expanded_system();
+    let filter = QueryFilter {
+        expanded: true,
+        pending_for: Some(String::from("alice")),
+        ..QueryFilter::default()
+    };
+    let results = query(&system, Path::new("/exp/review.md"), &filter).unwrap();
+
+    let output = render_query_plain(&results);
+    assert!(
+        output.starts_with("review.md (1 of 3 comments, 2 pending)\n"),
+        "plain header should name matched and file-wide counts, was:\n{output}"
+    );
+}
+
+#[test]
+fn plain_header_keeps_the_bare_count_without_a_filter() {
+    let system = setup_expanded_system();
+    let filter = QueryFilter {
+        expanded: true,
+        ..QueryFilter::default()
+    };
+    let results = query(&system, Path::new("/exp/review.md"), &filter).unwrap();
+
+    let output = render_query_plain(&results);
+    assert!(
+        output.starts_with("review.md (3 comments, 2 pending)\n"),
+        "unfiltered plain header should stay unchanged, was:\n{output}"
+    );
+}
+
+#[test]
+fn plain_summary_header_names_both_counts_under_a_filter() {
+    let system = setup_expanded_system();
+    let filter = QueryFilter {
+        author: Some(String::from("bob")),
+        summary: true,
+        ..QueryFilter::default()
+    };
+    let results = query(&system, Path::new("/exp/review.md"), &filter).unwrap();
+
+    let output = render_query_plain(&results);
+    assert_eq!(output, "review.md (1 of 3 comments, 2 pending)\n");
 }

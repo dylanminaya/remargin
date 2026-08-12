@@ -753,11 +753,24 @@ pub fn resolve_comment_id(
     Ok(matches)
 }
 
+/// Render the comment-count phrase of a result header.
+///
+/// Reads `{matched} of {total} comments` when a comment-level filter
+/// narrowed the set, `{total} comments` otherwise. Shared with the
+/// pretty printer so both text surfaces say the same thing.
+pub(crate) fn format_comment_count(matched: u32, total: u32) -> String {
+    if matched == total {
+        format!("{total} comments")
+    } else {
+        format!("{matched} of {total} comments")
+    }
+}
+
 /// Render query results in plain (or summary) text format.
 ///
 /// Each result produces one header line with the path, comment count,
-/// and pending count. When `expanded` comments are present, each
-/// comment produces an indented detail line.
+/// and the file-wide pending count. When `expanded` comments are
+/// present, each comment produces an indented detail line.
 ///
 /// This covers the `Plain` and `Summary` output modes. The `Pretty`
 /// mode delegates to [`crate::display::format_query_pretty`]; the `Json`
@@ -769,9 +782,9 @@ pub fn render_query_plain(results: &[QueryResult]) -> String {
     for r in results {
         let _ = writeln!(
             out,
-            "{} ({} comments, {} pending)",
+            "{} ({}, {} pending)",
             r.path.display(),
-            r.comment_count,
+            format_comment_count(r.matched_count, r.comment_count),
             r.pending_count,
         );
         for cm in r.comments.as_deref().unwrap_or(&[]) {

@@ -8,7 +8,7 @@ use std::path::Path;
 
 use crate::activity::{ActivityResult, Change};
 use crate::config::identity::IdentityReport;
-use crate::operations::query::{ExpandedComment, QueryResult};
+use crate::operations::query::{ExpandedComment, QueryResult, format_comment_count};
 use crate::parser::{self, Comment};
 use crate::reactions::ReactionsExt as _;
 
@@ -204,15 +204,12 @@ pub fn format_query_pretty(results: &[QueryResult], filter_name: Option<&str>) -
 
         let path_str = result.path.display().to_string();
         let comments_slice = result.comments.as_deref().unwrap_or(&[]);
-        let comment_count = comments_slice.len();
         let pending_count = count_pending_expanded(comments_slice);
         total_pending += pending_count;
 
+        let count_label = format_comment_count(result.matched_count, result.comment_count);
         let pending_label = format_pending_label(pending_count, filter_name);
-        let _ = writeln!(
-            out,
-            "{path_str} ({comment_count} comments, {pending_label})"
-        );
+        let _ = writeln!(out, "{path_str} ({count_label}, {pending_label})");
 
         let mut comments: Vec<&ExpandedComment> = comments_slice.iter().collect();
         comments.sort_by_key(|cm| cm.line);
