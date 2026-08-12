@@ -365,12 +365,14 @@ pub fn cmd_goose_mcp_install(
     let cwd = env::current_dir().context("resolving current directory")?;
     let path = goose_mcp_config_file(system, &cwd, local)?;
     let outcome = goose_mcp_install::install(system, &path)?;
-    let status = match outcome {
-        goose_mcp_install::InstallOutcome::AlreadyInstalled => "already_installed",
-        goose_mcp_install::InstallOutcome::Installed => "installed",
-        _ => "unknown",
+    let (status, normalized) = match outcome {
+        goose_mcp_install::InstallOutcome::AlreadyInstalled => ("already_installed", false),
+        goose_mcp_install::InstallOutcome::Installed { normalized_layout } => {
+            ("installed", normalized_layout)
+        }
+        _ => ("unknown", false),
     };
-    emit_goose_mcp_status(sinks, json_mode, local, status, None, &path)
+    emit_goose_mcp_status(sinks, json_mode, local, status, None, normalized, &path)
 }
 
 pub fn cmd_goose_mcp_test(
@@ -383,7 +385,15 @@ pub fn cmd_goose_mcp_test(
     let path = goose_mcp_config_file(system, &cwd, local)?;
     let outcome = goose_mcp_install::test(system, &path)?;
     let (status, detail) = goose_mcp_test_status(outcome);
-    emit_goose_mcp_status(sinks, json_mode, local, status, detail.as_deref(), &path)
+    emit_goose_mcp_status(
+        sinks,
+        json_mode,
+        local,
+        status,
+        detail.as_deref(),
+        false,
+        &path,
+    )
 }
 
 pub fn cmd_goose_mcp_uninstall(
@@ -395,12 +405,14 @@ pub fn cmd_goose_mcp_uninstall(
     let cwd = env::current_dir().context("resolving current directory")?;
     let path = goose_mcp_config_file(system, &cwd, local)?;
     let outcome = goose_mcp_install::uninstall(system, &path)?;
-    let status = match outcome {
-        goose_mcp_install::UninstallOutcome::NotInstalled => "not_installed",
-        goose_mcp_install::UninstallOutcome::Uninstalled => "uninstalled",
-        _ => "unknown",
+    let (status, normalized) = match outcome {
+        goose_mcp_install::UninstallOutcome::NotInstalled => ("not_installed", false),
+        goose_mcp_install::UninstallOutcome::Uninstalled { normalized_layout } => {
+            ("uninstalled", normalized_layout)
+        }
+        _ => ("unknown", false),
     };
-    emit_goose_mcp_status(sinks, json_mode, local, status, None, &path)
+    emit_goose_mcp_status(sinks, json_mode, local, status, None, normalized, &path)
 }
 
 fn goose_mcp_test_status(
@@ -420,12 +432,17 @@ fn goose_mcp_test_status(
 /// requirement: goose discovers only the user-scope config, so a project
 /// file nothing points at is a successful write that changes no session —
 /// the exact silent dead end this command exists to remove.
+///
+/// `normalized` marks a write that could not be made in place and had to
+/// re-serialize the document. The user's comments and spacing are gone
+/// after one of those, so it is said rather than left to be discovered.
 fn emit_goose_mcp_status(
     sinks: &mut IoSinks<'_>,
     json_mode: bool,
     local: bool,
     status: &str,
     detail: Option<&str>,
+    normalized: bool,
     path: &Path,
 ) -> Result<()> {
     let scope = scope_label(local);
@@ -439,6 +456,7 @@ fn emit_goose_mcp_status(
                 "detail": detail,
                 "config_file": path.display().to_string(),
                 "requires_env": local.then_some(goose_mcp_install::ADDITIONAL_CONFIG_ENV),
+                "normalized_layout": normalized,
             }),
         );
     }
@@ -450,6 +468,15 @@ fn emit_goose_mcp_status(
     .context("writing to stderr")?;
     if let Some(reason) = detail {
         writeln!(sinks.stderr, "  {reason}").context("writing to stderr")?;
+    }
+    if normalized {
+        writeln!(
+            sinks.stderr,
+            "  warning: {} uses a layout remargin cannot edit in place, so this write \
+             re-serialized the file — its comments and spacing are gone, its content is unchanged.",
+            path.display(),
+        )
+        .context("writing to stderr")?;
     }
     if local {
         writeln!(

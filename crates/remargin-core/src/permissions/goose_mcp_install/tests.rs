@@ -170,6 +170,14 @@ fn field(entry: &Mapping, key: &str) -> Value {
     entry.get(Value::from(key)).cloned().unwrap()
 }
 
+fn installed(normalized_layout: bool) -> InstallOutcome {
+    InstallOutcome::Installed { normalized_layout }
+}
+
+fn uninstalled(normalized_layout: bool) -> UninstallOutcome {
+    UninstallOutcome::Uninstalled { normalized_layout }
+}
+
 fn expect_broken(outcome: TestOutcome) -> String {
     assert!(
         matches!(outcome, TestOutcome::Broken(_)),
@@ -231,10 +239,7 @@ fn local_config_file_lands_under_the_project_goose_dir() {
 #[test]
 fn install_writes_the_entry_when_no_config_exists() {
     let system = mock();
-    assert_eq!(
-        install(&system, &config_path()).unwrap(),
-        InstallOutcome::Installed,
-    );
+    assert_eq!(install(&system, &config_path()).unwrap(), installed(false));
 
     let entry = entry_of(&system);
     assert_eq!(field(&entry, "type"), Value::from("stdio"));
@@ -274,10 +279,7 @@ fn generated_entry_names_the_binary_by_absolute_path() {
 #[test]
 fn install_is_idempotent() {
     let system = mock();
-    assert_eq!(
-        install(&system, &config_path()).unwrap(),
-        InstallOutcome::Installed,
-    );
+    assert_eq!(install(&system, &config_path()).unwrap(), installed(false));
     assert_eq!(
         install(&system, &config_path()).unwrap(),
         InstallOutcome::AlreadyInstalled,
@@ -305,10 +307,7 @@ fn install_rewrites_a_drifted_entry_in_place() {
         mock(),
         &entry_yaml("    type: stdio\n    name: remargin\n    cmd: /old/remargin\n"),
     );
-    assert_eq!(
-        install(&system, &config_path()).unwrap(),
-        InstallOutcome::Installed,
-    );
+    assert_eq!(install(&system, &config_path()).unwrap(), installed(false));
     assert_eq!(field(&entry_of(&system), "cmd"), Value::from(EXE));
 }
 
@@ -373,10 +372,7 @@ fn install_refuses_to_overwrite_an_unparseable_config() {
 #[test]
 fn install_treats_an_empty_config_as_an_absence_to_fill() {
     let system = seed(mock(), "");
-    assert_eq!(
-        install(&system, &config_path()).unwrap(),
-        InstallOutcome::Installed,
-    );
+    assert_eq!(install(&system, &config_path()).unwrap(), installed(false));
     assert_eq!(
         entry_of(&system).get(Value::from("name")),
         Some(&Value::from(EXTENSION_NAME)),
@@ -395,7 +391,7 @@ fn uninstall_removes_only_remargins_entry() {
     let _outcome = install(&system, &config_path()).unwrap();
     assert_eq!(
         uninstall(&system, &config_path()).unwrap(),
-        UninstallOutcome::Uninstalled,
+        uninstalled(false),
     );
 
     let config = config_of(&system);
@@ -548,10 +544,7 @@ fn test_reports_broken_for_an_unparseable_config() {
 fn install_preserves_every_byte_outside_the_entry() {
     let original = joined(COMMENTED_CONFIG);
     let system = seed(mock(), &original);
-    assert_eq!(
-        install(&system, &config_path()).unwrap(),
-        InstallOutcome::Installed,
-    );
+    assert_eq!(install(&system, &config_path()).unwrap(), installed(false));
 
     let after = system.read_to_string(&config_path()).unwrap();
     assert_eq!(without_entry_block(&after), original);
@@ -565,10 +558,7 @@ fn install_preserves_every_byte_outside_the_entry() {
 fn install_repairs_a_drifted_entry_without_reflowing_the_rest() {
     let original = joined(DRIFTED_CONFIG);
     let system = seed(mock(), &original);
-    assert_eq!(
-        install(&system, &config_path()).unwrap(),
-        InstallOutcome::Installed,
-    );
+    assert_eq!(install(&system, &config_path()).unwrap(), installed(false));
 
     let after = system.read_to_string(&config_path()).unwrap();
     assert_eq!(without_entry_block(&after), without_entry_block(&original));
@@ -584,10 +574,7 @@ fn install_appends_to_a_config_that_declares_no_extensions() {
         "active_provider: ollama",
     ]);
     let system = seed(mock(), &original);
-    assert_eq!(
-        install(&system, &config_path()).unwrap(),
-        InstallOutcome::Installed,
-    );
+    assert_eq!(install(&system, &config_path()).unwrap(), installed(false));
 
     let after = system.read_to_string(&config_path()).unwrap();
     assert!(
@@ -603,7 +590,7 @@ fn uninstall_removes_only_the_entrys_lines() {
     let system = seed(mock(), &original);
     assert_eq!(
         uninstall(&system, &config_path()).unwrap(),
-        UninstallOutcome::Uninstalled,
+        uninstalled(false),
     );
     assert_eq!(
         system.read_to_string(&config_path()).unwrap(),
@@ -619,7 +606,7 @@ fn uninstall_of_the_last_entry_empties_the_mapping_in_place() {
     let system = seed(mock(), &joined(SOLE_ENTRY_CONFIG));
     assert_eq!(
         uninstall(&system, &config_path()).unwrap(),
-        UninstallOutcome::Uninstalled,
+        uninstalled(false),
     );
     assert_eq!(
         system.read_to_string(&config_path()).unwrap(),
@@ -633,7 +620,8 @@ fn uninstall_of_the_last_entry_empties_the_mapping_in_place() {
 
 /// Flow style is a shape the line editor does not model, so the write
 /// falls back to re-serializing the document. Formatting is lost there;
-/// the config's content is not.
+/// the config's content is not, and the outcome says which of the two
+/// happened so the caller can warn.
 #[test]
 fn install_falls_back_to_reserializing_a_flow_style_extensions_block() {
     let system = seed(
@@ -642,7 +630,8 @@ fn install_falls_back_to_reserializing_a_flow_style_extensions_block() {
     );
     assert_eq!(
         install(&system, &config_path()).unwrap(),
-        InstallOutcome::Installed,
+        installed(true),
+        "a re-serialized write must report the layout it normalized",
     );
 
     let config = config_of(&system);
@@ -660,4 +649,35 @@ fn install_falls_back_to_reserializing_a_flow_style_extensions_block() {
         "sibling extension dropped: {extensions:?}",
     );
     assert_eq!(field(&entry_of(&system), "cmd"), Value::from(EXE));
+}
+
+/// Removal falls back the same way, and reports it the same way.
+#[test]
+fn uninstall_falls_back_to_reserializing_a_flow_style_extensions_block() {
+    let system = seed(
+        mock(),
+        "active_provider: ollama\nextensions: {remargin: {enabled: true, type: stdio, name: \
+         remargin, cmd: /opt/bin/remargin, args: [mcp]}, developer: {enabled: true}}\n",
+    );
+    assert_eq!(
+        uninstall(&system, &config_path()).unwrap(),
+        uninstalled(true),
+        "a re-serialized write must report the layout it normalized",
+    );
+
+    let config = config_of(&system);
+    assert_eq!(
+        config.get(Value::from("active_provider")),
+        Some(&Value::from("ollama")),
+    );
+    let extensions = config
+        .get(Value::from("extensions"))
+        .unwrap()
+        .as_mapping()
+        .unwrap();
+    assert!(
+        extensions.get(Value::from("developer")).is_some(),
+        "sibling extension dropped: {extensions:?}",
+    );
+    assert!(extensions.get(Value::from(EXTENSION_KEY)).is_none());
 }

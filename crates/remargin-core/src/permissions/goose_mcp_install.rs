@@ -27,7 +27,9 @@
 //! - **Idempotence without churn.** An entry already matching the canonical
 //!   shape leaves the file untouched, and a write that is needed edits only
 //!   the lines of remargin's own entry, so a hand-maintained config keeps
-//!   its comments and its layout either way.
+//!   its comments and its layout either way. A layout the line editor
+//!   declines re-serializes the document instead, and the outcome reports
+//!   that so the caller can say the formatting went.
 //!
 //! Scope: goose discovers exactly one config file,
 //! `$XDG_CONFIG_HOME/goose/config.yaml` (`~/.config/goose/config.yaml` by
@@ -126,11 +128,24 @@ enum EntryState {
     Wired,
 }
 
+/// The bytes a write is about to land, and what producing them cost.
+struct ConfigWrite {
+    body: String,
+    /// `true` when the body is a re-serialization of the whole document
+    /// rather than an edit of remargin's own lines, which is where the
+    /// file's comments and layout are lost.
+    normalizes: bool,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum InstallOutcome {
     AlreadyInstalled,
-    Installed,
+    /// `normalized_layout` reports a write that had to re-serialize the
+    /// document: the config's content survives, its formatting does not.
+    Installed {
+        normalized_layout: bool,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -147,7 +162,11 @@ pub enum TestOutcome {
 #[non_exhaustive]
 pub enum UninstallOutcome {
     NotInstalled,
-    Uninstalled,
+    /// `normalized_layout` carries the same meaning it does on
+    /// [`InstallOutcome::Installed`].
+    Uninstalled {
+        normalized_layout: bool,
+    },
 }
 
 /// The config file a `--local` install writes, under the project root.
@@ -191,9 +210,11 @@ pub fn install(system: &dyn System, path: &Path) -> Result<InstallOutcome> {
     let mut extensions = child_mapping(&config, EXTENSIONS_KEY);
     insert(&mut extensions, EXTENSION_KEY, entry.clone());
     insert(&mut config, EXTENSIONS_KEY, Value::Mapping(extensions));
-    let body = config_body(&original, Edit::Set(&entry), &config)?;
-    write_config(system, path, &body)?;
-    Ok(InstallOutcome::Installed)
+    let write = config_body(&original, Edit::Set(&entry), &config)?;
+    write_config(system, path, &write.body)?;
+    Ok(InstallOutcome::Installed {
+        normalized_layout: write.normalizes,
+    })
 }
 
 /// Report whether goose would load remargin's tools from this config.
@@ -246,9 +267,11 @@ pub fn uninstall(system: &dyn System, path: &Path) -> Result<UninstallOutcome> {
     // differently from an empty one is not this command's question to
     // answer on the user's config.
     insert(&mut config, EXTENSIONS_KEY, Value::Mapping(extensions));
-    let body = config_body(&original, Edit::Remove, &config)?;
-    write_config(system, path, &body)?;
-    Ok(UninstallOutcome::Uninstalled)
+    let write = config_body(&original, Edit::Remove, &config)?;
+    write_config(system, path, &write.body)?;
+    Ok(UninstallOutcome::Uninstalled {
+        normalized_layout: write.normalizes,
+    })
 }
 
 /// goose's config file for user scope: `$XDG_CONFIG_HOME/goose/config.yaml`,
@@ -293,17 +316,27 @@ fn canonical_entry(command: &str) -> Value {
 /// the line editor safe to trust — an edit landing anywhere but where it
 /// was meant to never reaches the file.
 ///
+/// The fallback is the one place a write costs the file its formatting,
+/// so it is also the one place that can report it.
+///
 /// # Errors
 ///
 /// Returns an error when the config cannot be serialized.
-fn config_body(original: &str, edit: Edit<'_>, intended: &Mapping) -> Result<String> {
+fn config_body(original: &str, edit: Edit<'_>, intended: &Mapping) -> Result<ConfigWrite> {
     if let Some(edited) = config_splice::apply(original, edit) {
         let parsed = serde_yaml::from_str::<Value>(&edited).ok();
         if parsed.as_ref().and_then(Value::as_mapping) == Some(intended) {
-            return Ok(edited);
+            return Ok(ConfigWrite {
+                body: edited,
+                normalizes: false,
+            });
         }
     }
-    serde_yaml::to_string(intended).context("serializing the goose config")
+    let body = serde_yaml::to_string(intended).context("serializing the goose config")?;
+    Ok(ConfigWrite {
+        body,
+        normalizes: true,
+    })
 }
 
 fn child_mapping(parent: &Mapping, key: &str) -> Mapping {

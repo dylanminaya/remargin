@@ -79,6 +79,17 @@ fn seed_populated_config(path: &Path) {
     .unwrap();
 }
 
+/// The same config written in flow style — a shape the in-place editor
+/// declines, so a write of it re-serializes the whole document.
+fn seed_flow_style_config(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        path,
+        "active_provider: ollama\nextensions: {developer: {enabled: true, type: builtin}}\n",
+    )
+    .unwrap();
+}
+
 // ---- 1-3. install / uninstall lifecycle --------------------------------
 
 /// `install` writes the entry, `uninstall` removes exactly it, and every
@@ -238,6 +249,98 @@ fn install_refuses_to_overwrite_an_unparseable_config() {
         "extensions: [ this is not\n",
         "the unreadable config must survive untouched",
     );
+}
+
+/// A layout the in-place editor does not model — a flow-style `extensions`
+/// value — still gets the entry written, by re-serializing the document.
+/// That costs the file its comments and its spacing, so the write says so
+/// instead of leaving the user to notice the reflow themselves.
+#[test]
+fn install_warns_when_the_write_normalizes_the_config_layout() {
+    let home = TempDir::new().unwrap();
+    let realm = TempDir::new().unwrap();
+    let config = user_config(home.path());
+
+    seed_flow_style_config(&config);
+    let reported = run_lifecycle(
+        home.path(),
+        realm.path(),
+        &["goose", "mcp", "--json", "install"],
+    );
+    assert_status(&reported, 0);
+    assert_eq!(status_of(&reported), "installed");
+    assert_eq!(report_of(&reported)["normalized_layout"], Value::Bool(true));
+
+    seed_flow_style_config(&config);
+    let text = run_lifecycle(home.path(), realm.path(), &["goose", "mcp", "install"]);
+    let stderr = stderr_of(&text);
+    assert!(
+        stderr.contains("warning") && stderr.contains(&config.display().to_string()),
+        "the normalizing write must warn and name the file: {stderr}",
+    );
+
+    // The entry landed and the rest of the config came with it.
+    let after = config_yaml(&config);
+    assert_eq!(after.get("active_provider").unwrap(), &Yaml::from("ollama"));
+    assert!(
+        after.get("extensions").unwrap().get("developer").is_some(),
+        "sibling extension dropped: {after:?}",
+    );
+    assert_eq!(
+        entry_at(&config).get("name").unwrap(),
+        &Yaml::from("remargin"),
+    );
+}
+
+/// The ordinary path edits remargin's own lines and leaves the file's
+/// layout alone, so there is nothing to warn about — and a run that writes
+/// nothing at all has even less.
+#[test]
+fn install_stays_quiet_when_the_write_preserves_the_layout() {
+    let home = TempDir::new().unwrap();
+    let realm = TempDir::new().unwrap();
+    let config = user_config(home.path());
+    seed_populated_config(&config);
+
+    let written = run_lifecycle(
+        home.path(),
+        realm.path(),
+        &["goose", "mcp", "--json", "install"],
+    );
+    assert_eq!(status_of(&written), "installed");
+    assert_eq!(report_of(&written)["normalized_layout"], Value::Bool(false));
+
+    seed_populated_config(&config);
+    let text = run_lifecycle(home.path(), realm.path(), &["goose", "mcp", "install"]);
+    assert!(
+        !stderr_of(&text).contains("warning"),
+        "a layout-preserving write must not warn: {}",
+        stderr_of(&text),
+    );
+
+    let again = run_lifecycle(
+        home.path(),
+        realm.path(),
+        &["goose", "mcp", "--json", "install"],
+    );
+    assert_eq!(status_of(&again), "already_installed");
+    assert_eq!(report_of(&again)["normalized_layout"], Value::Bool(false));
+
+    let removed = run_lifecycle(
+        home.path(),
+        realm.path(),
+        &["goose", "mcp", "--json", "uninstall"],
+    );
+    assert_eq!(status_of(&removed), "uninstalled");
+    assert_eq!(report_of(&removed)["normalized_layout"], Value::Bool(false));
+
+    let absent = run_lifecycle(
+        home.path(),
+        realm.path(),
+        &["goose", "mcp", "--json", "uninstall"],
+    );
+    assert_eq!(status_of(&absent), "not_installed");
+    assert_eq!(report_of(&absent)["normalized_layout"], Value::Bool(false));
 }
 
 // ---- 4. test subcommand ------------------------------------------------
