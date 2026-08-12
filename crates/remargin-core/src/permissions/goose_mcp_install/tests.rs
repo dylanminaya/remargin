@@ -21,6 +21,82 @@ use super::{
 
 const EXE: &str = "/opt/bin/remargin";
 
+/// A config as a user keeps it: comments on their own lines and trailing
+/// ones, blank lines grouping the sections, and both quoting styles. Every
+/// byte of it outside remargin's entry belongs to the user.
+const COMMENTED_CONFIG: &[&str] = &[
+    "# goose config -- hand maintained",
+    "GOOSE_TELEMETRY_ENABLED: false",
+    "",
+    "# the provider comes first, everything else after",
+    "active_provider: \"ollama\"",
+    "providers:",
+    "  ollama:",
+    "    enabled: true # this one stays on",
+    "    model: 'gemma4:31b'",
+    "",
+    "extensions:",
+    "  developer:",
+    "    enabled: true",
+    "    type: builtin",
+    "    name: developer",
+    "",
+    "# nothing below here is goose's",
+    "notes: see the wiki",
+];
+
+/// The same care, around a remargin entry that has drifted: an old `cmd`,
+/// a comment of its own, and a sibling declared after it.
+const DRIFTED_CONFIG: &[&str] = &[
+    "# goose config -- hand maintained",
+    "active_provider: ollama",
+    "",
+    "extensions:",
+    "  remargin:",
+    "    # points at the binary an older install put here",
+    "    type: stdio",
+    "    name: remargin",
+    "    cmd: /old/remargin",
+    "    args:",
+    "    - mcp",
+    "  developer:",
+    "    enabled: true",
+    "",
+    "# tail comment",
+    "GOOSE_TELEMETRY_ENABLED: false",
+];
+
+/// A config where remargin is the only extension declared.
+const SOLE_ENTRY_CONFIG: &[&str] = &[
+    "# goose config -- hand maintained",
+    "active_provider: ollama",
+    "",
+    "extensions:",
+    "  remargin:",
+    "    enabled: true",
+    "    type: stdio",
+    "    name: remargin",
+    "    cmd: /opt/bin/remargin",
+    "    args:",
+    "    - mcp",
+    "",
+    "# tail comment",
+    "GOOSE_TELEMETRY_ENABLED: false",
+];
+
+/// [`SOLE_ENTRY_CONFIG`] after an uninstall: the entry's lines are gone
+/// and `extensions` says so as an empty mapping, not as a bare key that
+/// would parse as null.
+const SOLE_ENTRY_UNINSTALLED: &[&str] = &[
+    "# goose config -- hand maintained",
+    "active_provider: ollama",
+    "",
+    "extensions: {}",
+    "",
+    "# tail comment",
+    "GOOSE_TELEMETRY_ENABLED: false",
+];
+
 fn home() -> PathBuf {
     PathBuf::from("/home/u")
 }
@@ -40,6 +116,33 @@ fn mock() -> MockSystem {
 
 fn seed(system: MockSystem, body: &str) -> MockSystem {
     system.with_file(config_path(), body.as_bytes()).unwrap()
+}
+
+fn joined(lines: &[&str]) -> String {
+    let mut body = String::new();
+    for line in lines {
+        body.push_str(line);
+        body.push('\n');
+    }
+    body
+}
+
+/// `body` with remargin's entry block dropped — its key line and every
+/// line indented under it — so a test can compare every byte a write was
+/// supposed to leave alone.
+fn without_entry_block(body: &str) -> String {
+    let mut kept = String::new();
+    let mut inside = false;
+    for line in body.split_inclusive('\n') {
+        if inside && line.starts_with("    ") && !line.trim().is_empty() {
+            continue;
+        }
+        inside = line.trim_end() == "  remargin:";
+        if !inside {
+            kept.push_str(line);
+        }
+    }
+    kept
 }
 
 fn config_of(system: &dyn System) -> Mapping {
@@ -434,4 +537,127 @@ fn test_reports_broken_for_an_unparseable_config() {
         reason.contains("not valid YAML"),
         "reason should name the parse fault: {reason}",
     );
+}
+
+// ---- 5. a hand-maintained config keeps its bytes -----------------------
+
+/// The one write that first adds the entry is the write that would
+/// reflow the file: comments, blank-line grouping, and quoting styles
+/// are the user's, and a config.yaml is hand-maintained.
+#[test]
+fn install_preserves_every_byte_outside_the_entry() {
+    let original = joined(COMMENTED_CONFIG);
+    let system = seed(mock(), &original);
+    assert_eq!(
+        install(&system, &config_path()).unwrap(),
+        InstallOutcome::Installed,
+    );
+
+    let after = system.read_to_string(&config_path()).unwrap();
+    assert_eq!(without_entry_block(&after), original);
+    assert_eq!(field(&entry_of(&system), "cmd"), Value::from(EXE));
+}
+
+/// Repairing a drifted entry rewrites that entry's lines and nothing
+/// else: the sibling declared after it, and the comments around the
+/// block, keep their bytes.
+#[test]
+fn install_repairs_a_drifted_entry_without_reflowing_the_rest() {
+    let original = joined(DRIFTED_CONFIG);
+    let system = seed(mock(), &original);
+    assert_eq!(
+        install(&system, &config_path()).unwrap(),
+        InstallOutcome::Installed,
+    );
+
+    let after = system.read_to_string(&config_path()).unwrap();
+    assert_eq!(without_entry_block(&after), without_entry_block(&original));
+    assert_eq!(field(&entry_of(&system), "cmd"), Value::from(EXE));
+}
+
+/// A config that declares no `extensions` at all gains one, appended,
+/// with everything the user wrote still above it.
+#[test]
+fn install_appends_to_a_config_that_declares_no_extensions() {
+    let original = joined(&[
+        "# goose config -- hand maintained",
+        "active_provider: ollama",
+    ]);
+    let system = seed(mock(), &original);
+    assert_eq!(
+        install(&system, &config_path()).unwrap(),
+        InstallOutcome::Installed,
+    );
+
+    let after = system.read_to_string(&config_path()).unwrap();
+    assert!(
+        after.starts_with(&original),
+        "the user's lines should be untouched above the appended block: {after}",
+    );
+    assert_eq!(field(&entry_of(&system), "cmd"), Value::from(EXE));
+}
+
+#[test]
+fn uninstall_removes_only_the_entrys_lines() {
+    let original = joined(DRIFTED_CONFIG);
+    let system = seed(mock(), &original);
+    assert_eq!(
+        uninstall(&system, &config_path()).unwrap(),
+        UninstallOutcome::Uninstalled,
+    );
+    assert_eq!(
+        system.read_to_string(&config_path()).unwrap(),
+        without_entry_block(&original),
+    );
+}
+
+/// Removing the block's last entry still leaves `extensions` a mapping:
+/// a bare key parses as null, which is a different config than the one
+/// uninstall means to write.
+#[test]
+fn uninstall_of_the_last_entry_empties_the_mapping_in_place() {
+    let system = seed(mock(), &joined(SOLE_ENTRY_CONFIG));
+    assert_eq!(
+        uninstall(&system, &config_path()).unwrap(),
+        UninstallOutcome::Uninstalled,
+    );
+    assert_eq!(
+        system.read_to_string(&config_path()).unwrap(),
+        joined(SOLE_ENTRY_UNINSTALLED),
+    );
+    assert_eq!(
+        config_of(&system).get(Value::from("extensions")),
+        Some(&Value::Mapping(Mapping::new())),
+    );
+}
+
+/// Flow style is a shape the line editor does not model, so the write
+/// falls back to re-serializing the document. Formatting is lost there;
+/// the config's content is not.
+#[test]
+fn install_falls_back_to_reserializing_a_flow_style_extensions_block() {
+    let system = seed(
+        mock(),
+        "active_provider: ollama\nextensions: {developer: {enabled: true}}\n",
+    );
+    assert_eq!(
+        install(&system, &config_path()).unwrap(),
+        InstallOutcome::Installed,
+    );
+
+    let config = config_of(&system);
+    assert_eq!(
+        config.get(Value::from("active_provider")),
+        Some(&Value::from("ollama")),
+    );
+    let extensions = config
+        .get(Value::from("extensions"))
+        .unwrap()
+        .as_mapping()
+        .unwrap();
+    assert!(
+        extensions.get(Value::from("developer")).is_some(),
+        "sibling extension dropped: {extensions:?}",
+    );
+    assert_eq!(field(&entry_of(&system), "cmd"), Value::from(EXE));
 }

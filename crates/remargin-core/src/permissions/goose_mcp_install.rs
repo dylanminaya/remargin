@@ -25,8 +25,9 @@
 //!   parse is an error here, never something to overwrite, and every write
 //!   lands through a temp file and a rename.
 //! - **Idempotence without churn.** An entry already matching the canonical
-//!   shape leaves the file untouched, so reinstalling never reformats a
-//!   hand-maintained config.
+//!   shape leaves the file untouched, and a write that is needed edits only
+//!   the lines of remargin's own entry, so a hand-maintained config keeps
+//!   its comments and its layout either way.
 //!
 //! Scope: goose discovers exactly one config file,
 //! `$XDG_CONFIG_HOME/goose/config.yaml` (`~/.config/goose/config.yaml` by
@@ -35,6 +36,7 @@
 //! a file the user must point that variable at, and the CLI says so rather
 //! than implying a scope goose would discover on its own.
 
+mod config_splice;
 #[cfg(test)]
 mod tests;
 
@@ -43,6 +45,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use os_shim::System;
 use serde_yaml::{Mapping, Value};
+
+use self::config_splice::Edit;
 
 /// Env var naming extra config files for goose to read. goose discovers no
 /// project-scoped config on its own, so a `--local` install only reaches a
@@ -100,7 +104,9 @@ enum ConfigState {
     /// Present but not a YAML mapping, so it describes nothing and must
     /// not be overwritten. Carries the reason.
     Unusable(String),
-    Usable(Mapping),
+    /// Carries the raw text alongside the parse: an edit is applied to
+    /// those bytes, not to a re-serialization of the parse.
+    Usable { body: String, mapping: Mapping },
 }
 
 /// What the config says about remargin's entry.
@@ -165,15 +171,15 @@ pub fn local_config_file(root: &Path) -> PathBuf {
 pub fn install(system: &dyn System, path: &Path) -> Result<InstallOutcome> {
     let command = extension_command(system)?;
     let entry = canonical_entry(&command);
-    let mut config = match load_config(system, path) {
-        ConfigState::Absent => Mapping::new(),
+    let (original, mut config) = match load_config(system, path) {
+        ConfigState::Absent => (String::new(), Mapping::new()),
         ConfigState::Unusable(reason) => {
             return Err(anyhow::anyhow!(
                 "{reason}; refusing to overwrite it because goose reads its provider and every \
                  other extension from this file"
             ));
         }
-        ConfigState::Usable(mapping) => mapping,
+        ConfigState::Usable { body, mapping } => (body, mapping),
     };
 
     // An entry already in canonical shape leaves the file alone entirely,
@@ -183,9 +189,10 @@ pub fn install(system: &dyn System, path: &Path) -> Result<InstallOutcome> {
     }
 
     let mut extensions = child_mapping(&config, EXTENSIONS_KEY);
-    insert(&mut extensions, EXTENSION_KEY, entry);
+    insert(&mut extensions, EXTENSION_KEY, entry.clone());
     insert(&mut config, EXTENSIONS_KEY, Value::Mapping(extensions));
-    write_config(system, path, &config)?;
+    let body = config_body(&original, Edit::Set(&entry), &config)?;
+    write_config(system, path, &body)?;
     Ok(InstallOutcome::Installed)
 }
 
@@ -218,7 +225,7 @@ pub fn test(system: &dyn System, path: &Path) -> Result<TestOutcome> {
 /// entry from it would mean rewriting a file this module cannot read), or
 /// when the file cannot be written.
 pub fn uninstall(system: &dyn System, path: &Path) -> Result<UninstallOutcome> {
-    let mut config = match load_config(system, path) {
+    let (original, mut config) = match load_config(system, path) {
         ConfigState::Absent => return Ok(UninstallOutcome::NotInstalled),
         ConfigState::Unusable(reason) => {
             return Err(anyhow::anyhow!(
@@ -226,7 +233,7 @@ pub fn uninstall(system: &dyn System, path: &Path) -> Result<UninstallOutcome> {
                  other extension from this file"
             ));
         }
-        ConfigState::Usable(mapping) => mapping,
+        ConfigState::Usable { body, mapping } => (body, mapping),
     };
     if declared_entry(&config).is_none() {
         return Ok(UninstallOutcome::NotInstalled);
@@ -239,7 +246,8 @@ pub fn uninstall(system: &dyn System, path: &Path) -> Result<UninstallOutcome> {
     // differently from an empty one is not this command's question to
     // answer on the user's config.
     insert(&mut config, EXTENSIONS_KEY, Value::Mapping(extensions));
-    write_config(system, path, &config)?;
+    let body = config_body(&original, Edit::Remove, &config)?;
+    write_config(system, path, &body)?;
     Ok(UninstallOutcome::Uninstalled)
 }
 
@@ -277,6 +285,25 @@ fn canonical_entry(command: &str) -> Value {
     insert(&mut entry, "env_keys", Value::Sequence(Vec::new()));
     insert(&mut entry, "envs", Value::Mapping(Mapping::new()));
     Value::Mapping(entry)
+}
+
+/// The bytes a write lands: the original text with only remargin's own
+/// lines edited when that edit reproduces `intended` exactly, and a full
+/// re-serialization otherwise. Re-parsing the edited text is what makes
+/// the line editor safe to trust — an edit landing anywhere but where it
+/// was meant to never reaches the file.
+///
+/// # Errors
+///
+/// Returns an error when the config cannot be serialized.
+fn config_body(original: &str, edit: Edit<'_>, intended: &Mapping) -> Result<String> {
+    if let Some(edited) = config_splice::apply(original, edit) {
+        let parsed = serde_yaml::from_str::<Value>(&edited).ok();
+        if parsed.as_ref().and_then(Value::as_mapping) == Some(intended) {
+            return Ok(edited);
+        }
+    }
+    serde_yaml::to_string(intended).context("serializing the goose config")
 }
 
 fn child_mapping(parent: &Mapping, key: &str) -> Mapping {
@@ -364,7 +391,7 @@ fn entry_state(system: &dyn System, path: &Path) -> Result<EntryState> {
     let config = match load_config(system, path) {
         ConfigState::Absent => return Ok(EntryState::ConfigAbsent),
         ConfigState::Unusable(reason) => return Ok(EntryState::ConfigUnusable(reason)),
-        ConfigState::Usable(mapping) => mapping,
+        ConfigState::Usable { mapping, .. } => mapping,
     };
     let Some(entry) = declared_entry(&config) else {
         return Ok(EntryState::Absent);
@@ -413,8 +440,11 @@ fn load_config(system: &dyn System, path: &Path) -> ConfigState {
         // goose writes an empty file before its first `configure`, and an
         // empty YAML document is a null, not a mapping — an absence to
         // fill rather than a fault.
-        Ok(Value::Null) => ConfigState::Usable(Mapping::new()),
-        Ok(Value::Mapping(mapping)) => ConfigState::Usable(mapping),
+        Ok(Value::Null) => ConfigState::Usable {
+            body,
+            mapping: Mapping::new(),
+        },
+        Ok(Value::Mapping(mapping)) => ConfigState::Usable { body, mapping },
         Ok(_) => ConfigState::Unusable(format!("{} is not a YAML mapping", path.display())),
         Err(err) => ConfigState::Unusable(format!("{} is not valid YAML ({err})", path.display())),
     }
@@ -425,13 +455,11 @@ fn string_field<'entry>(mapping: &'entry Mapping, key: &str) -> Option<&'entry s
     mapping.get(Value::from(key)).and_then(Value::as_str)
 }
 
-/// Render and replace `path` through a sibling temp file and a rename, so
-/// an interrupted write can never leave goose a half-file. goose reads its
+/// Replace `path` through a sibling temp file and a rename, so an
+/// interrupted write can never leave goose a half-file. goose reads its
 /// provider from here: a config it cannot parse costs the user every
 /// session, not just remargin's tools.
-fn write_config(system: &dyn System, path: &Path, config: &Mapping) -> Result<()> {
-    let body = serde_yaml::to_string(&Value::Mapping(config.clone()))
-        .context("serializing the goose config")?;
+fn write_config(system: &dyn System, path: &Path, body: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         system
             .create_dir_all(parent)
