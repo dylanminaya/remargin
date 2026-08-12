@@ -73,5 +73,5 @@ predicates.workspace = true
 # `span-locations` exposes `Span::start()` / `Span::end()` so we can
 # measure each function's physical line span.
 proc-macro2 = { version = "1", features = ["span-locations"] }
-syn = { version = "2", features = ["full", "parsing"] }
+syn = { version = "3", features = ["full", "parsing"] }
 tempfile.workspace = true

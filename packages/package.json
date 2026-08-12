@@ -6,6 +6,6 @@
     "lint": "pnpm run -r lint"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.15"
+    "@biomejs/biome": "2.5.8"
   }
 }
