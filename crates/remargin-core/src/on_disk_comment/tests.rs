@@ -47,6 +47,33 @@ fn from_comment_formats_ack_as_author_at_ts_string() {
     assert_eq!(on_disk.ack, vec!["jorge@2026-04-06T15:00:00-04:00"]);
 }
 
+/// Every timestamp the wire schema carries renders through the same
+/// canonical helper, so a zero offset lands on disk as `Z` — matching what
+/// serde emits for the identical instant in a JSON payload.
+#[test]
+fn from_comment_renders_every_zero_offset_timestamp_with_z() {
+    let mut comment = sample_comment();
+    comment.ts = DateTime::parse_from_rfc3339("2026-04-06T14:32:00+00:00").unwrap();
+    comment.edited_at = Some(DateTime::parse_from_rfc3339("2026-04-07T10:00:00+00:00").unwrap());
+    comment.ack = vec![Acknowledgment {
+        author: String::from("jorge"),
+        ts: DateTime::parse_from_rfc3339("2026-04-06T15:00:00+00:00").unwrap(),
+    }];
+    let mut reactions = Reactions::new();
+    let _added = reactions.add_reaction(
+        "+1",
+        "bob",
+        DateTime::parse_from_rfc3339("2026-04-26T12:00:00+00:00").unwrap(),
+    );
+    comment.reactions = reactions;
+
+    let on_disk = OnDiskComment::from(&comment);
+    assert_eq!(on_disk.ts, "2026-04-06T14:32:00Z");
+    assert_eq!(on_disk.edited_at.as_deref(), Some("2026-04-07T10:00:00Z"));
+    assert_eq!(on_disk.ack, vec!["jorge@2026-04-06T15:00:00Z"]);
+    assert_eq!(on_disk.reactions["+1"][0].ts, "2026-04-26T12:00:00Z");
+}
+
 #[test]
 fn from_comment_drops_in_memory_only_fields() {
     let on_disk = OnDiskComment::from(&sample_comment());
@@ -112,7 +139,7 @@ fn dedupes_acks_at_wire_boundary() {
     let on_disk = OnDiskComment::from(&comment);
     assert_eq!(on_disk.ack.len(), 1, "duplicate acks must collapse");
     assert!(
-        on_disk.ack[0].contains("2026-04-27T05:02:00+00:00"),
+        on_disk.ack[0].contains("2026-04-27T05:02:00Z"),
         "survivor must carry latest ts: {}",
         on_disk.ack[0]
     );

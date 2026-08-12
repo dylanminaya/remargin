@@ -10,7 +10,7 @@ use serde::ser::SerializeStruct as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tixschema::model_schema;
 
-use crate::parser::{Acknowledgment, AuthorType, Comment};
+use crate::parser::{Acknowledgment, AuthorType, Comment, rfc3339_z};
 use crate::reactions::{
     ReactionEntry, Reactions, ReactionsExt as _, deserialize_with_legacy, legacy_sentinel_ts,
 };
@@ -185,7 +185,7 @@ impl From<&Comment> for OnDiskComment {
         let deduped_acks = dedupe_acks(ack);
         let ack_strings: Vec<String> = deduped_acks
             .into_iter()
-            .map(|entry| format!("{}@{}", entry.author, entry.ts.to_rfc3339()))
+            .map(|entry| format!("{}@{}", entry.author, rfc3339_z(&entry.ts)))
             .collect();
 
         let reactions_on_disk: BTreeMap<String, Vec<ReactionEntryOnDisk>> = reactions
@@ -196,7 +196,7 @@ impl From<&Comment> for OnDiskComment {
                     .into_iter()
                     .map(|entry| ReactionEntryOnDisk {
                         author: entry.author,
-                        ts: entry.ts.to_rfc3339(),
+                        ts: rfc3339_z(&entry.ts),
                     })
                     .collect();
                 (emoji, on_disk)
@@ -207,8 +207,8 @@ impl From<&Comment> for OnDiskComment {
             id: id.clone(),
             author: author.clone(),
             author_type: String::from(author_type.as_str()),
-            ts: ts.to_rfc3339(),
-            edited_at: edited_at.map(|t| t.to_rfc3339()),
+            ts: rfc3339_z(ts),
+            edited_at: edited_at.as_ref().map(rfc3339_z),
             to: to.clone(),
             reply_to: reply_to.clone(),
             thread: thread.clone(),
@@ -341,7 +341,7 @@ where
                 .into_iter()
                 .map(|entry: ReactionEntry| ReactionEntryOnDisk {
                     author: entry.author,
-                    ts: entry.ts.to_rfc3339(),
+                    ts: rfc3339_z(&entry.ts),
                 })
                 .collect();
             (emoji, on_disk)

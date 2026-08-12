@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use chrono::DateTime;
 use os_shim::mock::MockSystem;
 
 use super::{AuthorType, Segment, parse, parse_file};
@@ -692,6 +693,77 @@ hi
     let entries = &cm.reactions["thumbsup"];
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].ts.to_rfc3339(), "2026-04-26T11:00:00-04:00");
+}
+
+/// One block carrying every timestamp the wire format has — `ts`,
+/// `edited_at`, a reaction entry, an ack entry — rendered with the given
+/// zero-offset spelling.
+fn zero_offset_block(offset: &str) -> String {
+    format!(
+        "\
+```remargin
+---
+id: zeroff
+author: eduardo
+type: human
+ts: 2026-04-26T10:00:00{offset}
+edited_at: 2026-04-26T11:00:00{offset}
+reactions:
+  thumbsup:
+    - author: claude
+      ts: 2026-04-26T12:00:00{offset}
+ack:
+  - claude@2026-04-26T13:00:00{offset}
+checksum: sha256:abc
+---
+hello
+```
+"
+    )
+}
+
+#[test]
+fn legacy_plus_zero_block_parses_to_the_same_instants_as_its_z_twin() {
+    let legacy = parse(&zero_offset_block("+00:00")).unwrap();
+    let modern = parse(&zero_offset_block("Z")).unwrap();
+    let legacy_cm = legacy.comments()[0];
+    let modern_cm = modern.comments()[0];
+
+    assert_eq!(legacy_cm.ts, modern_cm.ts);
+    assert_eq!(
+        legacy_cm.ts,
+        DateTime::parse_from_rfc3339("2026-04-26T10:00:00Z").unwrap()
+    );
+    assert_eq!(legacy_cm.edited_at, modern_cm.edited_at);
+    assert_eq!(legacy_cm.ack[0].ts, modern_cm.ack[0].ts);
+    assert_eq!(
+        legacy_cm.reactions["thumbsup"][0].ts,
+        modern_cm.reactions["thumbsup"][0].ts
+    );
+}
+
+#[test]
+fn legacy_plus_zero_block_converges_to_z_on_rewrite() {
+    let written = parse(&zero_offset_block("+00:00"))
+        .unwrap()
+        .to_markdown()
+        .unwrap();
+
+    for expected in [
+        "ts: 2026-04-26T10:00:00Z",
+        "edited_at: 2026-04-26T11:00:00Z",
+        "ts: 2026-04-26T12:00:00Z",
+        "- claude@2026-04-26T13:00:00Z",
+    ] {
+        assert!(
+            written.contains(expected),
+            "rewrite must render {expected:?}:\n{written}"
+        );
+    }
+    assert!(
+        !written.contains("+00:00"),
+        "rewrite must leave no legacy zero-offset spelling behind:\n{written}"
+    );
 }
 
 #[test]

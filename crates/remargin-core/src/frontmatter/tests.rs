@@ -722,6 +722,33 @@ fn sandbox_existing_sequence_reads_entries() {
     assert_eq!(entries[0].author, "alice");
 }
 
+/// Frontmatter written before the `Z` switch spells a zero offset
+/// `+00:00`. It must read back as the same instant its `Z` twin does, and
+/// converge to `Z` the next time the document is written.
+#[test]
+fn sandbox_legacy_zero_offset_reads_like_z_and_converges_on_write() {
+    let legacy_body =
+        "---\ntitle: Doc\nsandbox:\n  - alice@2026-04-16T14:00:00+00:00\n---\n\nBody.\n";
+    let z_body = "---\ntitle: Doc\nsandbox:\n  - alice@2026-04-16T14:00:00Z\n---\n\nBody.\n";
+
+    let mut legacy_doc = make_doc(legacy_body, Vec::new());
+    let legacy_entries = read_sandbox_entries(&legacy_doc).unwrap();
+    let z_entries = read_sandbox_entries(&make_doc(z_body, Vec::new())).unwrap();
+    assert_eq!(legacy_entries.len(), 1);
+    assert_eq!(legacy_entries[0].ts, z_entries[0].ts);
+    assert_eq!(
+        legacy_entries[0].ts,
+        DateTime::parse_from_rfc3339("2026-04-16T14:00:00Z").unwrap()
+    );
+
+    write_sandbox_entries(&mut legacy_doc, &legacy_entries).unwrap();
+    let markdown = legacy_doc.to_markdown().unwrap();
+    assert!(
+        markdown.contains("- alice@2026-04-16T14:00:00Z"),
+        "rewrite must render the sandbox entry with Z:\n{markdown}"
+    );
+}
+
 #[test]
 fn sandbox_null_value_self_heals_on_write() {
     // Starting from bare `sandbox:` (null), add an entry and confirm the

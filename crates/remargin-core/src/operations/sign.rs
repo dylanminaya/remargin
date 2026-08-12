@@ -285,7 +285,7 @@ pub fn sign_comments(
             cm.signature = Some(sig);
             signed.push(SignedEntry {
                 id: cm.id.clone(),
-                ts: cm.ts.to_rfc3339(),
+                ts: parser::rfc3339_z(&cm.ts),
             });
         }
     }
@@ -339,7 +339,7 @@ pub(crate) fn classify_candidates(
             let mut targets = Vec::new();
             for cm in doc.comments() {
                 if cm.author == identity && cm.signature.is_none() {
-                    targets.push((cm.id.clone(), cm.ts.to_rfc3339()));
+                    targets.push((cm.id.clone(), parser::rfc3339_z(&cm.ts)));
                 }
             }
             Ok((targets, Vec::new()))
@@ -365,7 +365,7 @@ pub(crate) fn classify_candidates(
                         reason: String::from("already_signed"),
                     });
                 } else {
-                    targets.push((cm.id.clone(), cm.ts.to_rfc3339()));
+                    targets.push((cm.id.clone(), parser::rfc3339_z(&cm.ts)));
                 }
             }
             Ok((targets, skipped))

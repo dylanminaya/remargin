@@ -20,6 +20,7 @@
 
 extern crate alloc;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use chrono::DateTime;
@@ -35,6 +36,7 @@ use crate::operations::sign::{
 };
 use crate::parser::{self, AuthorType, Comment, Segment};
 use crate::reactions::Reactions;
+use crate::writer::write_document;
 
 // ---- Test key pair -----------------------------------------------------
 //
@@ -458,6 +460,94 @@ fn signed_comment_survives_reparse_with_signature() {
         .filter(|s| matches!(s, Segment::Comment(cm) if cm.signature.is_some()))
         .count();
     assert_eq!(signed_count, 1, "exactly one signed comment expected");
+}
+
+/// Signature stability across the on-disk timestamp format change. A doc
+/// authored and signed while zero offsets were spelled `+00:00` verifies
+/// as-is, and keeps verifying after a rewrite converts its disk timestamps
+/// to `Z` — the signing payload is rebuilt from the parsed instant, which
+/// both spellings share.
+#[test]
+fn legacy_zero_offset_signature_survives_the_z_rewrite() {
+    let content = "alice's note";
+    let cksum = crypto::compute_checksum(content, &[]);
+    let comment = Comment {
+        ack: Vec::new(),
+        attachments: Vec::new(),
+        author: String::from("alice"),
+        author_type: AuthorType::Human,
+        checksum: cksum.clone(),
+        content: String::from(content),
+        edited_at: None,
+        el: None,
+        id: String::from("alc"),
+        line: 0,
+        reactions: Reactions::new(),
+        remargin_kind: None,
+        reply_to: None,
+        signature: None,
+        sl: None,
+        thread: None,
+        to: Vec::new(),
+        ts: DateTime::parse_from_rfc3339("2026-04-06T12:00:00+00:00").unwrap(),
+    };
+    let signing_system = MockSystem::new()
+        .with_file(Path::new("/keys/ed25519"), TEST_PRIVATE_KEY.as_bytes())
+        .unwrap();
+    let sig = compute_signature(&comment, Path::new("/keys/ed25519"), &signing_system).unwrap();
+
+    let legacy_doc = format!(
+        "\
+---
+title: Legacy
+---
+
+```remargin
+---
+id: alc
+author: alice
+type: human
+ts: 2026-04-06T12:00:00+00:00
+ack:
+  - bob@2026-04-06T13:00:00+00:00
+checksum: {cksum}
+signature: {sig}
+---
+{content}
+```
+"
+    );
+    let system = MockSystem::new()
+        .with_dir(Path::new("/d"))
+        .unwrap()
+        .with_file(Path::new("/d/legacy.md"), legacy_doc.as_bytes())
+        .unwrap();
+
+    let before = parser::parse_file(&system, Path::new("/d/legacy.md")).unwrap();
+    assert!(
+        crypto::verify_signature(before.comments()[0], TEST_PUBLIC_KEY).unwrap(),
+        "legacy +00:00 document must verify before any rewrite"
+    );
+
+    let empty: HashSet<String> = HashSet::new();
+    write_document(&system, Path::new("/d/legacy.md"), &before, &empty, &empty).unwrap();
+
+    let rewritten = system.read_to_string(Path::new("/d/legacy.md")).unwrap();
+    assert!(
+        rewritten.contains("ts: 2026-04-06T12:00:00Z")
+            && rewritten.contains("- bob@2026-04-06T13:00:00Z"),
+        "rewrite must converge the disk timestamps to Z:\n{rewritten}"
+    );
+    assert!(
+        !rewritten.contains("+00:00"),
+        "rewrite must leave no legacy zero-offset spelling behind:\n{rewritten}"
+    );
+
+    let after = parser::parse_file(&system, Path::new("/d/legacy.md")).unwrap();
+    assert!(
+        crypto::verify_signature(after.comments()[0], TEST_PUBLIC_KEY).unwrap(),
+        "signature must survive the Z rewrite"
+    );
 }
 
 // ---- repair_checksum --------------------------------------

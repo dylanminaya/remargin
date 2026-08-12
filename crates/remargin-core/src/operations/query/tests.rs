@@ -4,7 +4,7 @@ use std::path::Path;
 
 use os_shim::mock::MockSystem;
 
-use crate::operations::query::{QueryFilter, query, resolve_comment_id};
+use crate::operations::query::{QueryFilter, query, resolve_comment_id, to_compact_row};
 use crate::parser::AuthorType;
 
 fn doc_with_pending() -> &'static str {
@@ -583,6 +583,48 @@ fn query_expanded_comment_fields_complete() {
     assert!(cm.attachments.is_empty());
     assert_eq!(cm.checksum, "sha256:c3c3");
     assert!(cm.signature.is_none());
+}
+
+/// A compact row mixes a serde-serialized `ts` with a hand-formatted ack
+/// string. Both must spell a zero offset the same way — `Z` — even when the
+/// file on disk still carries the legacy `+00:00` form.
+#[test]
+fn compact_row_ts_and_ack_agree_on_the_z_spelling() {
+    let doc = "\
+---
+title: Mixed
+---
+
+```remargin
+---
+id: zed
+author: alice
+type: human
+ts: 2026-04-06T12:00:00+00:00
+to: [bob]
+ack:
+  - bob@2026-04-06T13:00:00+00:00
+checksum: sha256:zzz
+---
+Please review.
+```
+";
+    let system = MockSystem::new()
+        .with_dir(Path::new("/z"))
+        .unwrap()
+        .with_file(Path::new("/z/a.md"), doc.as_bytes())
+        .unwrap();
+    let filter = QueryFilter {
+        expanded: true,
+        ..QueryFilter::default()
+    };
+
+    let results = query(&system, Path::new("/z"), &filter).unwrap();
+    let comments = results[0].comments.as_ref().unwrap();
+    let row = to_compact_row(&comments[0], false);
+
+    assert_eq!(row[4], serde_json::json!("2026-04-06T12:00:00Z"));
+    assert_eq!(row[8], serde_json::json!(["bob@2026-04-06T13:00:00Z"]));
 }
 
 // ===========================================================================

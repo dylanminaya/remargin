@@ -22,7 +22,7 @@ use chrono::{DateTime, FixedOffset, Utc};
 use serde_yaml::{Mapping, Value};
 
 use crate::config::{Mode, ResolvedConfig};
-use crate::parser::{self, Comment, ParsedDocument, SandboxEntry, Segment};
+use crate::parser::{self, Comment, ParsedDocument, SandboxEntry, Segment, rfc3339_z};
 
 /// The frontmatter key under which sandbox entries are stored.
 ///
@@ -368,7 +368,7 @@ fn populate_non_author_fields(mapping: &mut Mapping, doc_body: &str) {
     // created: current timestamp if not set.
     let created_key = Value::String(String::from("created"));
     if !mapping.contains_key(&created_key) {
-        let now = Utc::now().to_rfc3339();
+        let now = rfc3339_z(&Utc::now());
         mapping.insert(created_key, Value::String(now));
     }
 }
@@ -422,7 +422,7 @@ pub fn update_remargin_fields(mapping: &mut Mapping, comments: &[&Comment]) {
     let last_activity_key = Value::String(String::from("remargin_last_activity"));
     match last_activity {
         Some(ts) => {
-            mapping.insert(last_activity_key, Value::String(ts.to_rfc3339()));
+            mapping.insert(last_activity_key, Value::String(rfc3339_z(&ts)));
         }
         None => {
             mapping.insert(last_activity_key, Value::Null);

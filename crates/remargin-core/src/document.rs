@@ -1565,7 +1565,7 @@ pub fn metadata(
         .iter()
         .map(|cm| cm.ts)
         .max()
-        .map(|ts| ts.to_rfc3339());
+        .map(|ts| parser::rfc3339_z(&ts));
 
     let fm = extract_frontmatter(&content);
 
@@ -1621,7 +1621,7 @@ fn get_remargin_metadata(system: &dyn System, path: &Path) -> (Option<u32>, Opti
         .iter()
         .map(|cm| cm.ts)
         .max()
-        .map(|ts| ts.to_rfc3339());
+        .map(|ts| parser::rfc3339_z(&ts));
 
     (u32::try_from(pending).ok(), last_activity)
 }

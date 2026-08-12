@@ -40,7 +40,7 @@ use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Deserializer, Serialize};
 use tixschema::model_schema;
 
-use crate::parser::Acknowledgment;
+use crate::parser::{Acknowledgment, rfc3339_z};
 
 /// One author's reaction with the time it was added.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -249,7 +249,7 @@ pub fn format_reaction_entry_block(indent: &str, entry: &ReactionEntry) -> Strin
     out.push('\n');
     out.push_str(indent);
     out.push_str("  ts: ");
-    out.push_str(&entry.ts.to_rfc3339());
+    out.push_str(&rfc3339_z(&entry.ts));
     out.push('\n');
     out
 }

@@ -5,11 +5,12 @@ pub mod heading;
 extern crate alloc;
 
 use alloc::collections::BTreeMap;
+use core::fmt::Display;
 use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context as _, Result};
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, SecondsFormat, TimeZone};
 use os_shim::System;
 use serde::Serialize;
 use tixschema::model_schema;
@@ -484,7 +485,20 @@ pub fn parse_sandbox_entry(entry: &str) -> Result<SandboxEntry> {
 /// Serialize a [`SandboxEntry`] to its compact `author@timestamp` wire form.
 #[must_use]
 pub fn format_sandbox_entry(entry: &SandboxEntry) -> String {
-    format!("{}@{}", entry.author, entry.ts.to_rfc3339())
+    format!("{}@{}", entry.author, rfc3339_z(&entry.ts))
+}
+
+/// Canonical RFC 3339 rendering for every displayed or on-disk timestamp:
+/// `SecondsFormat::AutoSi` plus `Z` for zero offset, exactly what chrono's
+/// serde impl emits, so hand-formatted and serde-serialized fields agree
+/// byte for byte. Crypto canonicalization payloads deliberately do NOT use
+/// this — see `crypto.rs`.
+pub(crate) fn rfc3339_z<Tz>(ts: &DateTime<Tz>) -> String
+where
+    Tz: TimeZone,
+    Tz::Offset: Display,
+{
+    ts.to_rfc3339_opts(SecondsFormat::AutoSi, true)
 }
 
 fn parse_remargin_block(inner: &str, line: usize) -> Result<Comment> {

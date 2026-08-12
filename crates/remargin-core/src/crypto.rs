@@ -78,6 +78,9 @@ pub fn compute_checksum(content: &str, kinds: &[String]) -> String {
 pub fn compute_reaction_checksum(reactions: &Reactions) -> String {
     let mut payload = String::new();
     for (emoji, entries) in reactions.entries_by_emoji() {
+        // Frozen: bare `to_rfc3339()` (zero offset as `+00:00`). Rendering
+        // this payload the way disk now renders (`Z`) would invalidate every
+        // stored reaction checksum.
         let mut projected: Vec<String> = entries
             .iter()
             .map(|e| format!("{}@{}", e.author, e.ts.to_rfc3339()))
@@ -195,6 +198,10 @@ fn signature_payload(comment: &Comment) -> String {
     let _ = writeln!(payload, "id:{}", comment.id);
     let _ = writeln!(payload, "author:{}", comment.author);
     let _ = writeln!(payload, "type:{}", comment.author_type.as_str());
+    // Frozen: bare `to_rfc3339()` (zero offset as `+00:00`). The payload is
+    // rebuilt from the *parsed* ts at verify time, so `Z` and `+00:00` on
+    // disk both land here as `+00:00` — which is what makes the disk-format
+    // change signature-safe. Re-rendering it would break every signature.
     let _ = writeln!(payload, "ts:{}", comment.ts.to_rfc3339());
     for recipient in &comment.to {
         let _ = writeln!(payload, "to:{recipient}");

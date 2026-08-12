@@ -389,7 +389,7 @@ pub fn render_activity_pretty(result: &ActivityResult) -> String {
         let _ = writeln!(out);
     }
     if let Some(ts) = result.newest_ts_overall {
-        let _ = writeln!(out, "(newest_ts_overall: {})", ts.to_rfc3339());
+        let _ = writeln!(out, "(newest_ts_overall: {})", parser::rfc3339_z(&ts));
     }
     out
 }

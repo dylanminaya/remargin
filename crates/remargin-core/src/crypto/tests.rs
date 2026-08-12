@@ -9,7 +9,7 @@ use os_shim::mock::MockSystem;
 
 use crate::crypto::{
     compute_checksum, compute_reaction_checksum, compute_signature, normalize_whitespace,
-    verify_checksum, verify_signature,
+    signature_payload, verify_checksum, verify_signature,
 };
 use crate::parser::{AuthorType, Comment};
 use crate::reactions::{Reactions, ReactionsExt as _};
@@ -296,6 +296,69 @@ fn empty_kinds_produce_legacy_checksum() {
     // Pre-computed on 0.1.6 via the old one-arg API.
     let expected_hello = "sha256:64ec88ca00b268e5ba1a35678a1b5316d212f4f366b2477232534a8aeca37f3c";
     assert_eq!(compute_checksum("Hello world", &[]), expected_hello);
+}
+
+/// The canonicalization payloads are frozen on bare `to_rfc3339()`, which
+/// renders a zero offset as `+00:00` — unlike everything the tool now puts
+/// on disk or on the wire, which renders `Z`. These two tests pin the exact
+/// bytes so a future "consistency cleanup" cannot silently invalidate every
+/// stored signature and reaction checksum.
+#[test]
+fn signature_payload_renders_zero_offset_as_plus_zero() {
+    let mut comment = make_comment("Frozen payload");
+    comment.ts = DateTime::parse_from_rfc3339("2026-04-06T12:00:00Z").unwrap();
+    assert_eq!(
+        signature_payload(&comment),
+        "id:abc\n\
+         author:eduardo\n\
+         type:human\n\
+         ts:2026-04-06T12:00:00+00:00\n\
+         content:Frozen payload"
+    );
+}
+
+#[test]
+fn reaction_checksum_renders_zero_offset_as_plus_zero() {
+    let mut reactions = Reactions::new();
+    let _added = reactions.add_reaction(
+        "thumbsup",
+        "alice",
+        DateTime::parse_from_rfc3339("2026-04-26T12:00:00Z").unwrap(),
+    );
+    // sha256 of `thumbsup:alice@2026-04-26T12:00:00+00:00\n`.
+    assert_eq!(
+        compute_reaction_checksum(&reactions),
+        "sha256:0ee7784f8207642512683e9eba361a4a56ca45beaa3eaee29b2f6709ad639c29"
+    );
+}
+
+/// Legacy `+00:00` on disk and its `Z` twin parse to the same instant, so
+/// both canonicalize to the same payload — that equivalence is what makes
+/// the on-disk format change signature-safe.
+#[test]
+fn z_and_plus_zero_disk_forms_canonicalize_identically() {
+    let mut from_z = make_comment("Same instant");
+    from_z.ts = DateTime::parse_from_rfc3339("2026-04-06T12:00:00Z").unwrap();
+    let mut from_offset = make_comment("Same instant");
+    from_offset.ts = DateTime::parse_from_rfc3339("2026-04-06T12:00:00+00:00").unwrap();
+    assert_eq!(signature_payload(&from_z), signature_payload(&from_offset));
+
+    let mut reactions_z = Reactions::new();
+    let _z = reactions_z.add_reaction(
+        "thumbsup",
+        "alice",
+        DateTime::parse_from_rfc3339("2026-04-26T12:00:00Z").unwrap(),
+    );
+    let mut reactions_offset = Reactions::new();
+    let _offset = reactions_offset.add_reaction(
+        "thumbsup",
+        "alice",
+        DateTime::parse_from_rfc3339("2026-04-26T12:00:00+00:00").unwrap(),
+    );
+    assert_eq!(
+        compute_reaction_checksum(&reactions_z),
+        compute_reaction_checksum(&reactions_offset)
+    );
 }
 
 /// Non-empty kinds change the checksum — otherwise the field would not

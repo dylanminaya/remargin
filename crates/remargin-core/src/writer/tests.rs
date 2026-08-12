@@ -655,7 +655,7 @@ fn serialize_comment_collapses_duplicate_acks() {
     let occurrences = output.matches("- eduardo-burgos@").count();
     assert_eq!(occurrences, 1, "serialized output must collapse duplicates");
     assert!(
-        output.contains("- eduardo-burgos@2026-04-27T05:02:15+00:00"),
+        output.contains("- eduardo-burgos@2026-04-27T05:02:15Z"),
         "surviving ack must carry the latest ts:\n{output}"
     );
 }
@@ -703,7 +703,7 @@ fn write_document_self_heals_legacy_duplicate_acks() {
         "write_document must collapse duplicate acks before bytes hit disk:\n{written}",
     );
     assert!(
-        written.contains("- eduardo-burgos@2026-04-27T05:02:15+00:00"),
+        written.contains("- eduardo-burgos@2026-04-27T05:02:15Z"),
         "survivor must carry the latest ts:\n{written}",
     );
 }

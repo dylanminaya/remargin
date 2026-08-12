@@ -118,6 +118,24 @@ fn parse_sandbox_entry_success() {
     );
 }
 
+/// Legacy frontmatter spells a zero offset `+00:00`; the writer now emits
+/// `Z`. Both must read back as the same instant, and a legacy entry must
+/// converge to `Z` when it is written out again.
+#[test]
+fn sandbox_entry_round_trips_legacy_zero_offset_to_z() {
+    let legacy = parser::parse_sandbox_entry("alice@2026-04-11T12:00:00+00:00").unwrap();
+    let modern = parser::parse_sandbox_entry("alice@2026-04-11T12:00:00Z").unwrap();
+    assert_eq!(legacy.ts, modern.ts);
+    assert_eq!(
+        parser::format_sandbox_entry(&legacy),
+        "alice@2026-04-11T12:00:00Z"
+    );
+    assert_eq!(
+        parser::format_sandbox_entry(&legacy),
+        parser::format_sandbox_entry(&modern)
+    );
+}
+
 #[test]
 fn parse_sandbox_entry_missing_at() {
     let err = parser::parse_sandbox_entry("alice").unwrap_err();
@@ -198,7 +216,7 @@ fn add_multi_identity_preserves_existing_entries() {
     add_to_files(&system, &files, "eduardo", &open_config()).unwrap();
 
     let content = read_file(&system, "/docs/a.md");
-    assert!(content.contains("jorge@2026-04-11T12:00:00+00:00"));
+    assert!(content.contains("jorge@2026-04-11T12:00:00Z"));
     assert!(content.contains("eduardo@"));
 }
 
@@ -274,7 +292,7 @@ fn remove_preserves_other_identities() {
     assert_eq!(result.changed.len(), 1);
 
     let content = read_file(&system, "/docs/a.md");
-    assert!(content.contains("jorge@2026-04-11T12:00:00+00:00"));
+    assert!(content.contains("jorge@2026-04-11T12:00:00Z"));
     assert!(!content.contains("eduardo@"));
 }
 

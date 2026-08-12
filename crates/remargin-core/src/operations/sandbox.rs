@@ -132,7 +132,7 @@ impl SandboxListEntry {
         };
         Self {
             path,
-            since: listing.since.to_rfc3339(),
+            since: parser::rfc3339_z(&listing.since),
         }
     }
 }

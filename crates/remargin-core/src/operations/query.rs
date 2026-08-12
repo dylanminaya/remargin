@@ -398,7 +398,7 @@ pub fn to_compact_row(comment: &ExpandedComment, include_integrity: bool) -> Val
     let ack: Vec<String> = comment
         .ack
         .iter()
-        .map(|a| format!("{}@{}", a.author, a.ts.to_rfc3339()))
+        .map(|a| format!("{}@{}", a.author, parser::rfc3339_z(&a.ts)))
         .collect();
     let mut row = vec![
         json!(comment.id),

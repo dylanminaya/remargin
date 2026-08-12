@@ -17,6 +17,7 @@ use chrono::Utc;
 use os_shim::System;
 use serde_yaml::{Mapping, Value};
 
+use crate::parser::rfc3339_z;
 use crate::permissions::claude_sync::{RuleSet, apply_rules, residual_rules};
 
 /// Wildcard literal accepted in `trusted_roots[].path`. Mirrors the schema
@@ -189,7 +190,7 @@ pub fn restrict(
     let claude_files_touched = if rules.is_empty() {
         Vec::new()
     } else {
-        let timestamp = Utc::now().to_rfc3339();
+        let timestamp = rfc3339_z(&Utc::now());
         apply_rules(
             system,
             &anchor,
