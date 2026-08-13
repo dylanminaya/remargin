@@ -28,6 +28,19 @@ pub struct Advice {
     pub message: String,
 }
 
+/// One run of consecutive lines that are the author's own prose.
+///
+/// Fenced code, blockquotes, tables, lists and headings are not prose and
+/// never appear here, so a check built on these blocks cannot fire on
+/// something the author merely quoted or demonstrated.
+#[derive(Debug)]
+pub(crate) struct ProseBlock<'text> {
+    /// 1-indexed line of the block's first line.
+    pub line: usize,
+    /// The block's lines, in order.
+    pub lines: Vec<&'text str>,
+}
+
 /// Review authored markdown and return any advisory notes, in line order.
 ///
 /// Returns an empty vector for content that reads cleanly -- the common
@@ -69,9 +82,14 @@ pub fn to_json(notes: &[Advice]) -> Value {
 ///
 /// Advisory only: no caller may read the added field as a failure signal.
 pub fn attach(result: &mut Value, content: &str) {
-    let notes = review(content);
+    attach_notes(result, &review(content));
+}
+
+/// [`attach`] for a caller that has already assembled its notes from more
+/// than one review pass.
+pub fn attach_notes(result: &mut Value, notes: &[Advice]) {
     if !notes.is_empty() {
-        result["warnings"] = to_json(&notes);
+        result["warnings"] = to_json(notes);
     }
 }
 
@@ -98,8 +116,36 @@ pub fn format_text(notes: &[Advice]) -> String {
 /// blockquotes, list items, HTML, indented blocks, and any line ending in
 /// an explicit markdown hard break.
 fn check_hard_wrapped_paragraphs(content: &str, notes: &mut Vec<Advice>) {
+    for block in prose_blocks(content) {
+        let span = block.lines.len();
+        if span > 1 {
+            notes.push(Advice {
+                line: block.line,
+                message: format!(
+                    "this paragraph is hard-wrapped across {span} lines; write it as one continuous line and let the reader's viewer wrap it"
+                ),
+            });
+        }
+    }
+}
+
+/// The hard-wrap notes on their own.
+///
+/// [`review`] folds them in with everything else it accumulates; a caller
+/// that must react to this one check — the comment gate promotes it to a
+/// rejection — needs it isolated so a later addition to `review` cannot
+/// silently change what gets rejected.
+pub(crate) fn hard_wrapped_paragraphs(content: &str) -> Vec<Advice> {
+    let mut notes = Vec::new();
+    check_hard_wrapped_paragraphs(content, &mut notes);
+    notes
+}
+
+/// Segment `content` into the runs of prose the author wrote themselves.
+pub(crate) fn prose_blocks(content: &str) -> Vec<ProseBlock<'_>> {
     let lines: Vec<&str> = content.split('\n').collect();
     let mut idx = skip_frontmatter(&lines);
+    let mut blocks = Vec::new();
 
     while idx < lines.len() {
         if let Some(fence) = fence_run(lines[idx]) {
@@ -121,17 +167,14 @@ fn check_hard_wrapped_paragraphs(content: &str, notes: &mut Vec<Advice>) {
             end += 1;
         }
 
-        if end > start {
-            let span = end - start + 1;
-            notes.push(Advice {
-                line: start + 1,
-                message: format!(
-                    "this paragraph is hard-wrapped across {span} lines; write it as one continuous line and let the reader's viewer wrap it"
-                ),
-            });
-        }
+        blocks.push(ProseBlock {
+            line: start + 1,
+            lines: lines[start..=end].to_vec(),
+        });
         idx = end + 1;
     }
+
+    blocks
 }
 
 /// The first line past a leading `---` frontmatter block.

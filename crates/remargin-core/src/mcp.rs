@@ -18,6 +18,7 @@ use serde_json::{Map, Value, json};
 
 use crate::activity;
 use crate::advice;
+use crate::comment_style;
 use crate::config::identity::{IdentityFlags, resolve_identity_report};
 use crate::config::permissions::resolve::{ResolvedPermissions, resolve_permissions};
 use crate::config::system_prompt::resolve_system_prompt;
@@ -2004,7 +2005,7 @@ fn handle_comment(
     // `reply` funnels through here too, so both comment surfaces get the
     // same advisory pass over the body the caller wrote.
     let mut result = responses::comment_created(&new_id);
-    advice::attach(&mut result, content);
+    advice::attach_notes(&mut result, &comment_style::notes(content));
     Ok(result)
 }
 

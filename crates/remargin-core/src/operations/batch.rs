@@ -16,6 +16,7 @@ use chrono::Utc;
 use os_shim::System;
 use serde_json::{Map, Value};
 
+use crate::comment_style;
 use crate::config::ResolvedConfig;
 use crate::crypto::{compute_checksum, compute_signature};
 use crate::frontmatter;
@@ -197,11 +198,15 @@ pub fn batch_comment(
     linter::lint_or_fail(&markdown_before)
         .context("document has structural issues before write")?;
 
-    // Validate auto_ack=Some(true) requires reply_to before any modifications.
+    // Validate auto_ack=Some(true) requires reply_to before any
+    // modifications, and hold every body to the same style gate the
+    // single-comment path applies — one refused body sinks the batch.
     for (idx, op) in operations.iter().enumerate() {
         if matches!(op.auto_ack, Some(true)) && op.reply_to.is_none() {
             bail!("batch operation {idx}: auto_ack requires reply_to");
         }
+        comment_style::gate(&op.content, &author_type)
+            .with_context(|| format!("batch operation {idx}"))?;
     }
 
     let mut created_ids: Vec<String> = Vec::new();

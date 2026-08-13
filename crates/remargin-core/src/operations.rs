@@ -28,6 +28,7 @@ use anyhow::{Context as _, Result, bail};
 use chrono::Utc;
 use os_shim::System;
 
+use crate::comment_style;
 use crate::config::ResolvedConfig;
 use crate::crypto::{compute_checksum, compute_reaction_checksum, compute_signature};
 use crate::frontmatter;
@@ -115,6 +116,7 @@ pub fn create_comment(
     }
 
     let author_type = cfg.author_type.clone().unwrap_or(AuthorType::Human);
+    comment_style::gate(params.content, &author_type)?;
 
     let mut doc = parser::parse_file(system, path)?;
     let markdown_before = doc.to_markdown()?;

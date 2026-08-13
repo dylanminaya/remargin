@@ -41,6 +41,7 @@ use crate::{
 };
 use remargin_core::activity;
 use remargin_core::advice;
+use remargin_core::comment_style;
 use remargin_core::config::identity::{IdentityFlags, resolve_identity_report};
 use remargin_core::config::{self, ResolvedConfig};
 use remargin_core::crypto;
@@ -817,13 +818,27 @@ pub fn cmd_comment(
 
     let new_id = operations::create_comment(system, &path, config, &params)?;
 
+    // Advisory only, exactly as `write` handles it: stderr in text mode so
+    // it never contaminates stdout, the payload in `--json` mode, and never
+    // the exit code — the comment is already on disk by this point.
+    let mut result = responses::comment_created(&new_id);
+    let notes = comment_style::notes(cp.content);
+    if cp.json_mode {
+        advice::attach_notes(&mut result, &notes);
+    } else {
+        let text = advice::format_text(&notes);
+        if !text.is_empty() {
+            write!(sinks.stderr, "{text}").context("writing advice to stderr")?;
+        }
+    }
+
     // Write to stdout if stdin mode.
     if cp.file == "-" {
         let updated = system.read_to_string(&path)?;
         out_raw(sinks, &updated)?;
     }
 
-    print_output(sinks, cp.json_mode, &responses::comment_created(&new_id))
+    print_output(sinks, cp.json_mode, &result)
 }
 
 pub fn cmd_comments(

@@ -1269,3 +1269,31 @@ fn batch_recipient_gate_in_batch_reply_to_active_author_allowed() {
         "both comments should be in the doc"
     );
 }
+
+#[test]
+fn one_refused_body_sinks_the_whole_agent_batch() {
+    let system = system_with_doc(MINIMAL_DOC);
+    let path = Path::new("/docs/test.md");
+    let config = ResolvedConfig {
+        author_type: Some(AuthorType::Agent),
+        ..open_config()
+    };
+    let ops = vec![
+        BatchCommentOp::new(String::from("A clean single-line body.")),
+        BatchCommentOp::new(String::from(
+            "The import form and the generate form both read their field list from the\ngateway, so a change to either one has to land in both controllers.\n",
+        )),
+    ];
+
+    let err = batch_comment(&system, path, &config, &ops).unwrap_err();
+
+    let msg = format!("{err:#}");
+    assert!(msg.contains("batch operation 1"), "names the op: {msg}");
+    assert!(
+        parser::parse_file(&system, path)
+            .unwrap()
+            .comments()
+            .is_empty(),
+        "the clean op is not written either"
+    );
+}

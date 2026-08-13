@@ -8,6 +8,7 @@ use std::thread;
 use os_shim::System as _;
 use os_shim::mock::MockSystem;
 
+use crate::comment_style;
 use crate::config::{Mode, ResolvedConfig};
 use crate::operations::{
     CreateCommentParams, ack_comments, create_comment, delete_comments, edit_comment, projections,
@@ -15,6 +16,11 @@ use crate::operations::{
 };
 use crate::parser::{self, AuthorType};
 use crate::writer::{FORBIDDEN_TARGETS, InsertPosition};
+
+/// The body every gate test uses: one paragraph, split by hand across two
+/// lines. Mechanical enough that the reject tier can act on it.
+const HARD_WRAPPED_BODY: &str = "The import form and the generate form both read their field list from the\n\
+                                 gateway, so a change to either one has to land in both controllers.\n";
 
 /// A minimal valid remargin document for testing.
 const MINIMAL_DOC: &str = "\
@@ -4036,4 +4042,146 @@ hello
         msg.contains("not an active registry participant"),
         "reply to revoked parent should be rejected: {msg}"
     );
+}
+
+/// Same identity, same document, only the declared type differs — the one
+/// input the style gate is allowed to branch on.
+fn typed_config(author_type: AuthorType) -> ResolvedConfig {
+    ResolvedConfig {
+        author_type: Some(author_type),
+        ..open_config()
+    }
+}
+
+#[test]
+fn agent_comment_with_a_hard_wrapped_body_is_refused_and_writes_nothing() {
+    let system = system_with_doc(MINIMAL_DOC);
+    let path = Path::new("/docs/test.md");
+    let before = read_file(&system, path);
+    let position = InsertPosition::Append;
+
+    let err = create_comment(
+        &system,
+        path,
+        &typed_config(AuthorType::Agent),
+        &CreateCommentParams::new(HARD_WRAPPED_BODY, &position),
+    )
+    .unwrap_err();
+
+    let msg = format!("{err:#}");
+    assert!(msg.contains("line 1"), "names the offending line: {msg}");
+    assert!(msg.contains("one continuous line"), "states the fix: {msg}");
+    assert_eq!(before, read_file(&system, path));
+}
+
+#[test]
+fn human_comment_with_the_same_hard_wrapped_body_is_written() {
+    let system = system_with_doc(MINIMAL_DOC);
+    let path = Path::new("/docs/test.md");
+    let position = InsertPosition::Append;
+
+    let id = create_comment(
+        &system,
+        path,
+        &typed_config(AuthorType::Human),
+        &CreateCommentParams::new(HARD_WRAPPED_BODY, &position),
+    )
+    .unwrap();
+
+    let doc = parser::parse_file(&system, path).unwrap();
+    assert_eq!(
+        doc.find_comment(&id).unwrap().content,
+        HARD_WRAPPED_BODY.trim_end()
+    );
+}
+
+#[test]
+fn agent_reply_closing_on_trailing_metadata_is_refused() {
+    let system = system_with_doc(&doc_with_comment());
+    let path = Path::new("/docs/test.md");
+    let before = read_file(&system, path);
+    let position = InsertPosition::Append;
+    let body = "Posted under the parent, so nothing was acked.\n\nOne thing: the sidebar shows a badge nobody asked about.\n";
+
+    let err = create_comment(
+        &system,
+        path,
+        &typed_config(AuthorType::Agent),
+        &CreateCommentParams {
+            reply_to: Some("abc"),
+            ..CreateCommentParams::new(body, &position)
+        },
+    )
+    .unwrap_err();
+
+    let msg = format!("{err:#}");
+    assert!(msg.contains("one thing"), "quotes the phrase: {msg}");
+    assert_eq!(before, read_file(&system, path));
+}
+
+#[test]
+fn agent_comment_quoting_trailing_metadata_is_written() {
+    let system = system_with_doc(MINIMAL_DOC);
+    let path = Path::new("/docs/test.md");
+    let position = InsertPosition::Append;
+    let body = "Rewrite the closing block as one of these:\n\n> One thing: the sidebar shows a badge nobody asked about.\n\n```markdown\nFor context, the badge comes from the parent.\n```\n";
+
+    let id = create_comment(
+        &system,
+        path,
+        &typed_config(AuthorType::Agent),
+        &CreateCommentParams::new(body, &position),
+    )
+    .unwrap();
+
+    let doc = parser::parse_file(&system, path).unwrap();
+    assert_eq!(doc.find_comment(&id).unwrap().content, body.trim_end());
+}
+
+#[test]
+fn agent_comment_earning_only_a_warning_is_written() {
+    let system = system_with_doc(MINIMAL_DOC);
+    let path = Path::new("/docs/test.md");
+    let position = InsertPosition::Append;
+    let body = "The recipient list is derived from the parent, as in ow6.\n";
+
+    let id = create_comment(
+        &system,
+        path,
+        &typed_config(AuthorType::Agent),
+        &CreateCommentParams::new(body, &position),
+    )
+    .unwrap();
+
+    assert_eq!(comment_style::notes(body).len(), 1, "the author is told");
+    let doc = parser::parse_file(&system, path).unwrap();
+    assert_eq!(doc.find_comment(&id).unwrap().content, body.trim_end());
+}
+
+#[test]
+fn no_config_state_turns_the_refusal_off() {
+    let system = system_with_doc(MINIMAL_DOC);
+    let path = Path::new("/docs/test.md");
+    let position = InsertPosition::Append;
+
+    // `unrestricted` is the widest escape hatch the config has, and mode is
+    // the only other dial an operator can reach. Neither buys a pass.
+    for mode in [Mode::Open, Mode::Registered, Mode::Strict] {
+        let config = ResolvedConfig {
+            mode: mode.clone(),
+            unrestricted: true,
+            ..typed_config(AuthorType::Agent)
+        };
+
+        assert!(
+            create_comment(
+                &system,
+                path,
+                &config,
+                &CreateCommentParams::new(HARD_WRAPPED_BODY, &position),
+            )
+            .is_err(),
+            "{mode:?} with unrestricted still refuses a hard-wrapped agent body"
+        );
+    }
 }
