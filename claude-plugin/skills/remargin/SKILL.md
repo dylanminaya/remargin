@@ -155,7 +155,7 @@ Each section starts with the question an agent is actually asking.
 
 ### Q: I have N pending comments to reply to. What do I do?
 
-This is the most common multi-comment workflow. Use `batch`. **Do not** bundle into one comment, **do not** post N sequential `comment` calls.
+This is the most common multi-comment workflow. Use `batch`.
 
 **Before the steps below: run activity first.** `remargin activity --pretty <folder>` or `/remargin:activity <folder>`. Read the full timeline before opening the pending queue — reactions, acks on threads you're in, comments addressed to others, edits, and signatures since your last visit all live there and may change what your reply should say. Pending-for-me is only one slice of the picture; activity is the full delta. See Critical rule 6.
 
