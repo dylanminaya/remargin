@@ -116,16 +116,10 @@ fn op_to_json(notes: &[OpAdvice]) -> Value {
     )
 }
 
-/// Attach the notes for `content` to an already-successful result under
-/// `warnings`, leaving the result untouched when there is nothing to say.
+/// Attach already-assembled notes to a successful result under `warnings`,
+/// leaving the result untouched when there is nothing to say.
 ///
 /// Advisory only: no caller may read the added field as a failure signal.
-pub fn attach(result: &mut Value, content: &str) {
-    attach_notes(result, &review(content));
-}
-
-/// [`attach`] for a caller that has already assembled its notes from more
-/// than one review pass.
 pub fn attach_notes(result: &mut Value, notes: &[Advice]) {
     if !notes.is_empty() {
         result["warnings"] = to_json(notes);

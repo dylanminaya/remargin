@@ -932,7 +932,22 @@ pub fn cmd_edit(
 ) -> Result<()> {
     let path = resolve_doc_path(system, cwd, p.file)?;
     operations::edit_comment(system, &path, config, p.id, p.content, p.remargin_kind)?;
-    print_output(sinks, p.json_mode, &responses::comment_edited(p.id))
+
+    // Advisory only, exactly as `comment` handles it: stderr in text mode so
+    // it never contaminates stdout, the payload in `--json` mode, and never
+    // the exit code — the edit is already on disk by this point.
+    let mut result = responses::comment_edited(p.id);
+    let notes = comment_style::notes(p.content);
+    if p.json_mode {
+        advice::attach_notes(&mut result, &notes);
+    } else {
+        let text = advice::format_text(&notes);
+        if !text.is_empty() {
+            write!(sinks.stderr, "{text}").context("writing advice to stderr")?;
+        }
+    }
+
+    print_output(sinks, p.json_mode, &result)
 }
 
 pub fn cmd_get(
