@@ -162,6 +162,15 @@ This is the most common multi-comment workflow. Use `batch`. **Do not** bundle i
 4. `auto_ack` defaults to the smart shape per Critical rule 9: omit it on most replies; set `true` only when (a) the parent is addressed to you via `to:` AND (b) your reply fully resolves the ask; set `false` to force-skip the ack.
 5. For broadcasts (`to: []`) or comments addressed to others, the smart default still applies (parent.author != caller → ack). Override with explicit `auto_ack: false` if the broadcast nature means an ack would be premature; ack separately via `remargin ack` if appropriate.
 
+**Pre-post checklist.** Read each draft body against this before the `batch` call — full guidance in rules 15, 17 and 22 and in [comment-style.md](comment-style.md):
+
+- First line is the outcome (rule 15).
+- Container matches the shape of the content: one fact one line, parallel items a bullet list, multi-attribute items a table, procedure a numbered list, code fenced (rule 15).
+- Blank line between every block (rule 15).
+- Ends on the answer — no closing "note that" / "FYI" / caveat (rule 22).
+- No pointer where the content belongs: no comment IDs, no "see above" — restate it (rule 17).
+- No count without its list: never "the other 12 routes" — name them (rule 17).
+
 ❌ **Never:** post one comment that summarizes answers to N other comments. Forces the user to re-thread mentally or reply with their own consolidation. Defeats threading. This was a real failure pattern — don't repeat it.
 
 ❌ **Never:** call `remargin comment` N times in sequence on the same file. Line numbers shift between calls; subsequent inserts land in the wrong places.
