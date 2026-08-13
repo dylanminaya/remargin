@@ -185,9 +185,9 @@ This is the most common multi-comment workflow. Use `batch`. **Do not** bundle i
 - No pointer where the content belongs: no comment IDs, no "see above" — restate it (rule 10).
 - No count without its list: never "the other 12 routes" — name them (rule 10).
 
-❌ **Never:** post one comment that summarizes answers to N other comments. Forces the user to re-thread mentally or reply with their own consolidation. Defeats threading. This was a real failure pattern — don't repeat it.
+❌ **Never** bundle answers to separate comments into one reply — rule 12.
 
-❌ **Never:** call `remargin comment` N times in sequence on the same file. Line numbers shift between calls; subsequent inserts land in the wrong places.
+❌ **Never** fire sequential `comment` calls on one file; line numbers shift — use `batch` (rule 21).
 
 ### Q: What's new in managed `.md` since I last acted?
 
