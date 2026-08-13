@@ -34,6 +34,20 @@ author: eduardo
 Some body text.
 ";
 
+/// A document the pre-write linter refuses: the fenced code block is
+/// never closed.
+const LINT_FAILING_DOC: &str = "\
+---
+title: Test
+author: eduardo
+---
+
+# Test Document
+
+```rust
+fn main() {}
+";
+
 /// Ed25519 test key used by the `project_sign` tests. Matched pair with
 /// the public key registered for `eduardo` under `sign_config()` — keeps
 /// the projection's signature output verifiable against the registry.
@@ -4466,6 +4480,56 @@ fn plan_of_a_batch_auto_ack_without_reply_to_is_refused_with_the_live_message() 
     projected_op.auto_ack = Some(true);
     let projected =
         projections::project_batch(&system, path, &config, &[projected_op]).unwrap_err();
+
+    assert_eq!(format!("{projected:#}"), format!("{live:#}"));
+}
+
+#[test]
+fn plan_of_a_comment_on_an_unlintable_document_is_refused_with_the_live_message() {
+    let system = system_with_doc(LINT_FAILING_DOC);
+    let path = Path::new("/docs/test.md");
+    let config = typed_config(AuthorType::Human);
+    let position = InsertPosition::Append;
+
+    let live = create_comment(
+        &system,
+        path,
+        &config,
+        &CreateCommentParams::new("A clean body.", &position),
+    )
+    .unwrap_err();
+
+    let params = projections::ProjectCommentParams::new("A clean body.", &position);
+    let projected = projections::project_comment(&system, path, &config, &params).unwrap_err();
+
+    assert_eq!(format!("{projected:#}"), format!("{live:#}"));
+}
+
+#[test]
+fn plan_of_a_batch_on_an_unlintable_document_is_refused_with_the_live_message() {
+    let system = system_with_doc(LINT_FAILING_DOC);
+    let path = Path::new("/docs/test.md");
+    let config = typed_config(AuthorType::Human);
+
+    let live = batch_ops::batch_comment(
+        &system,
+        path,
+        &config,
+        &[batch_ops::BatchCommentOp::new(String::from(
+            "A clean body.",
+        ))],
+    )
+    .unwrap_err();
+
+    let projected = projections::project_batch(
+        &system,
+        path,
+        &config,
+        &[projections::ProjectBatchOp::new(String::from(
+            "A clean body.",
+        ))],
+    )
+    .unwrap_err();
 
     assert_eq!(format!("{projected:#}"), format!("{live:#}"));
 }

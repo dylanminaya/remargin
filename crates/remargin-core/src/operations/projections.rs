@@ -333,7 +333,7 @@ pub fn project_batch(
     let (before, mut after) = parse_file_twice(system, path)?;
 
     linter::lint_or_fail(&after.to_markdown()?)
-        .context("document has structural issues before plan batch")?;
+        .context("document has structural issues before write")?;
 
     preflight_batch_ops(operations, &author_type)?;
 
@@ -480,7 +480,8 @@ pub fn project_comment(
     let (before, mut after) = parse_file_twice(system, path)?;
 
     let markdown_before = after.to_markdown()?;
-    linter::lint_or_fail(&markdown_before).context("document has structural issues before plan")?;
+    linter::lint_or_fail(&markdown_before)
+        .context("document has structural issues before write")?;
 
     let existing_ids = after.comment_ids();
     let new_id = id::generate(&existing_ids);
