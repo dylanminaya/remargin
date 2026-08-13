@@ -118,7 +118,7 @@ stop at the first match:
 
 9. **Every comment is structured markdown, and it leads with the answer.** A comment body renders as markdown for a human scanning a thread months later, sometimes in a narrow sidebar and sometimes on a very wide screen. Three requirements, ordered by how often each is broken:
    - **Lead with the outcome.** The first line states the decision, the finding, or the answer. No run-up, no restating the question, no narrating how you got there.
-   - **Match the container to the shape of the content.** One fact is one line. Two to four parallel items with short values are a bullet list. Three or more items each carrying two or more attributes are a table. An ordered procedure is a numbered list. Code, config, command output, or a wire payload is a fenced block with a language tag. One topic with distinct phases takes `###` headings — but distinct *topics* are separate replies, not headings (rule 12). A horizontal rule (`---`) between major blocks of a long comment is welcome.
+   - **Match the container to the shape of the content.** One fact is one line. Two to four parallel items with short values are a bullet list. Three or more items each carrying two or more attributes are a table. An ordered procedure is a numbered list. Code, config, command output, or a wire payload is a fenced block with a language tag. A flow with branches, a state machine, a sequence of interactions between parties, or a dependency graph is a fenced ```mermaid block — it renders inline as a diagram in the comment view, so a chart costs the reader nothing. Two boxes and one arrow is a sentence, not a chart. One topic with distinct phases takes `###` headings — but distinct *topics* are separate replies, not headings (rule 12). A horizontal rule (`---`) between major blocks of a long comment is welcome.
    - **Blank line between every block.** A comment that arrives as one unbroken slab of prose is a defect at any length, and it is the single most common complaint about agent comments.
 
    Also: inline `` `code` `` for paths, identifiers, op names and commands; fenced code blocks for multi-line code, YAML, JSON, command output; **bold** on the line carrying the takeaway, never a whole paragraph; markdown links (`[label](url)`) for external references.
@@ -179,7 +179,7 @@ This is the most common multi-comment workflow. Use `batch`. **Do not** bundle i
 **Pre-post checklist.** Read each draft body against this before the `batch` call — full guidance in rules 9, 10 and 11 and in [comment-style.md](comment-style.md):
 
 - First line is the outcome (rule 9).
-- Container matches the shape of the content: one fact one line, parallel items a bullet list, multi-attribute items a table, procedure a numbered list, code fenced (rule 9).
+- Container matches the shape of the content: one fact one line, parallel items a bullet list, multi-attribute items a table, procedure a numbered list, code fenced, flows and state machines a mermaid fence (rule 9).
 - Blank line between every block (rule 9).
 - Ends on the answer — no closing "note that" / "FYI" / caveat (rule 11).
 - No pointer where the content belongs: no comment IDs, no "see above" — restate it (rule 10).

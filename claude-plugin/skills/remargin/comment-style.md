@@ -25,6 +25,7 @@ None of those comments was missing information. Each one was missing *shape* —
 | Three or more items, each with two or more attributes | Table |
 | Ordered procedure | Numbered list |
 | Code, config, command output, wire payload | Fenced block with a language tag |
+| Flow with branches, state machine, sequence, dependency graph | Fenced ```mermaid block |
 | One topic with distinct phases | `###` headings |
 | Distinct topics | Separate replies (rule 12), never headings |
 
@@ -67,6 +68,26 @@ The table also exposed a gap the prose hid: the route was missing, and the route
 > Posted as `zuv`, threaded under the parent. It is a self-reply, so nothing was acked.
 
 If a caveat genuinely changes the reader's next action, it belongs inline at the point where it is relevant — not parked at the end.
+
+## Worked example: prose to diagram
+
+**Before** — four transitions the reader must hold in their head:
+
+> On a write from an agent identity the gate runs the reject-tier checks first; if any fires, the write is refused with the line and the fix. If none fires the write lands and the warn-tier checks run over the same body, their findings riding back on the result. Human identities skip all of it.
+
+**After** — the same flow, rendered inline as a diagram:
+
+> ```mermaid
+> graph TD
+>     W[comment / reply write] --> T{author type?}
+>     T -- human --> H[lands, no checks]
+>     T -- agent --> R{reject-tier finding?}
+>     R -- yes --> X[refused: line + fix]
+>     R -- no --> L[lands]
+>     L --> N[warn-tier notes on the result]
+> ```
+
+Reach for a diagram when the reader would otherwise hold three or more transitions in their head. Below that, prose — two boxes and one arrow is a sentence, not a chart. Mermaid fences render inline in the comment view, and the style gate never rejects them: fenced blocks are skipped by every check.
 
 ## Brevity and density are different things
 
