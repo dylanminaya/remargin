@@ -15,7 +15,7 @@ Vault-wide sandbox processing. Each prompt group runs in an isolated subagent co
 2. **Group by prompt.** For each file, call `mcp__remargin__prompt_resolve` and bucket by the resolved prompt name. If no files are sandboxed, emit step 4's nothing-sandboxed single line and exit.
 
 3. **Process each group via a subagent — sequentially.** For each prompt name with at least one sandboxed file:
-   1. Spawn a subagent via the `Agent` tool with `subagent_type: "general-purpose"`. The prompt for the subagent: instruct it to process exactly the files in this group, under the resolved system prompt body, following the same flow as `/remargin:process-sandbox-group <prompt-name>`. Include the prompt body inline so the subagent has full context.
+   1. Spawn a subagent via the `Agent` tool with `subagent_type: "general-purpose"`. The prompt for the subagent: instruct it to process exactly the files in this group, under the resolved system prompt body, following the same flow as `/remargin:process-sandbox-group <prompt-name>`. Include the prompt body inline so the subagent has full context. Bind its report too, or it will narrate: tell it to **report back only the receipt counts** — `found` / `actions` / `after`, per file and summed — plus **blockers** (every file left sandboxed, every denied op) and anything **needing the owner's decision**, one line each; and to **never restate, quote, summarize, or paraphrase comment or reply content** in what it returns.
    2. Wait for the subagent to complete. Capture its counts and blockers for the receipt — never its prose.
    3. Move to the next group. Do NOT do groups in parallel — sequential subagents preserve the user's ability to follow what's happening.
 

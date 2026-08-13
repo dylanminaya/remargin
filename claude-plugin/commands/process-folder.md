@@ -15,7 +15,7 @@ Activity-driven folder processing. Awareness comes first — the full activity d
 3. **Group by resolved prompt.** For each file in the action set, call `mcp__remargin__prompt_resolve` and bucket by resolved prompt name. If the action set is empty, emit step 6's nothing-actionable single line and exit.
 
 4. **Process each group via a subagent — sequentially.** For each prompt name with at least one actionable file:
-   1. Spawn a subagent via the `Agent` tool with `subagent_type: "general-purpose"`. Instruct it to process exactly the files in this group under the resolved system prompt body (included inline), following the `/remargin:process-file` flow per file.
+   1. Spawn a subagent via the `Agent` tool with `subagent_type: "general-purpose"`. Instruct it to process exactly the files in this group under the resolved system prompt body (included inline), following the `/remargin:process-file` flow per file. The spawn prompt must bind the subagent's report as well, or it will narrate: tell it to **report back only the receipt counts** — `found` / `actions` / `after`, per file and summed — plus **blockers** and anything **needing the owner's decision**, one line each; and to **never restate, quote, summarize, or paraphrase comment or reply content** in what it returns.
    2. Wait for completion. Capture its counts and blockers for the receipt — never its prose.
    3. Move to the next group. Do NOT run groups in parallel — sequential subagents preserve the user's ability to follow what's happening.
 
