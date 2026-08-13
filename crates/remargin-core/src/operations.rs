@@ -543,6 +543,11 @@ pub fn edit_comment(
     let cm = find_comment_mut(&mut doc, comment_id)
         .with_context(|| format!("comment {comment_id:?} not found"))?;
 
+    // Keyed on the editor rather than the comment's original author:
+    // whoever writes this body answers for it.
+    let editor_type = cfg.author_type.clone().unwrap_or(AuthorType::Human);
+    comment_style::gate_edit(&cm.content, new_content, &editor_type)?;
+
     cm.content = String::from(new_content);
     if let Some(kinds) = new_kinds {
         cm.remargin_kind = if kinds.is_empty() {

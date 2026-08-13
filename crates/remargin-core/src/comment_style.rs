@@ -17,6 +17,7 @@
 mod tests;
 
 use core::fmt::Write as _;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use anyhow::{Result, bail};
@@ -66,11 +67,32 @@ enum Severity {
     Warn,
 }
 
+/// Which check produced a finding. Severity hangs off the kind rather than
+/// off the individual finding, so two findings of one kind can never
+/// disagree about whether that kind refuses — which is what the edit
+/// comparison counts on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum FindingKind {
+    BareIdReference,
+    DenseBody,
+    HardWrap,
+    TrailingMetadata,
+}
+
+impl FindingKind {
+    const fn severity(self) -> Severity {
+        match self {
+            Self::HardWrap | Self::TrailingMetadata => Severity::Reject,
+            Self::BareIdReference | Self::DenseBody => Severity::Warn,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StyleFinding {
+    kind: FindingKind,
     line: usize,
     message: String,
-    severity: Severity,
 }
 
 /// Refuse a comment body whose reject-tier checks fail.
@@ -83,11 +105,60 @@ pub fn gate(content: &str, author_type: &AuthorType) -> Result<()> {
         return Ok(());
     }
 
-    let mut buf = String::new();
+    refuse(
+        review(content)
+            .into_iter()
+            .filter(|finding| finding.kind.severity() == Severity::Reject),
+    )
+}
+
+/// Refuse an edit that leaves the body worse than it found it: a reject-tier
+/// kind occurring more often in `new_content` than in `old_content`.
+///
+/// A repair, full or partial, passes because the counts fall; an inherited
+/// fault the editor did not touch passes because its count holds. Gating the
+/// new body outright would instead strand an editor mid-repair on a body
+/// somebody else wrote.
+///
+/// # Errors
+///
+/// Returns an error naming every offending line and what to do about it.
+pub fn gate_edit(old_content: &str, new_content: &str, author_type: &AuthorType) -> Result<()> {
+    if matches!(*author_type, AuthorType::Human) {
+        return Ok(());
+    }
+
+    let before = reject_counts(old_content);
+    let worsened: HashSet<FindingKind> = reject_counts(new_content)
+        .into_iter()
+        .filter(|(kind, count)| *count > before.get(kind).copied().unwrap_or(0))
+        .map(|(kind, _)| kind)
+        .collect();
+
+    // Every occurrence of a worsened kind is named, inherited ones included:
+    // the editor has to bring the count back down and picks which one goes.
+    refuse(
+        review(new_content)
+            .into_iter()
+            .filter(|finding| worsened.contains(&finding.kind)),
+    )
+}
+
+/// Occurrences per reject-tier kind in `content`.
+fn reject_counts(content: &str) -> HashMap<FindingKind, usize> {
+    let mut counts = HashMap::new();
     for finding in review(content) {
-        if finding.severity == Severity::Reject {
-            let _ = writeln!(buf, "  line {}: {}", finding.line, finding.message);
+        if finding.kind.severity() == Severity::Reject {
+            *counts.entry(finding.kind).or_insert(0) += 1;
         }
+    }
+    counts
+}
+
+fn refuse(findings: impl IntoIterator<Item = StyleFinding>) -> Result<()> {
+    let mut buf = String::new();
+    for finding in findings {
+        let _ = writeln!(buf, "  line {}: {}", finding.line, finding.message);
     }
     if buf.is_empty() {
         return Ok(());
@@ -101,7 +172,7 @@ pub fn gate(content: &str, author_type: &AuthorType) -> Result<()> {
 pub fn notes(content: &str) -> Vec<Advice> {
     let mut notes = advice::review(content);
     notes.extend(review(content).into_iter().filter_map(|finding| {
-        (finding.severity == Severity::Warn).then_some(Advice {
+        (finding.kind.severity() == Severity::Warn).then_some(Advice {
             line: finding.line,
             message: finding.message,
         })
@@ -136,11 +207,11 @@ fn check_bare_id_references(content: &str, findings: &mut Vec<StyleFinding>) {
                     continue;
                 }
                 findings.push(StyleFinding {
+                    kind: FindingKind::BareIdReference,
                     line: block.line + offset,
                     message: format!(
                         "{token:?} reads as a comment id; quote or paraphrase what that comment said instead, so the reference stands on its own"
                     ),
-                    severity: Severity::Warn,
                 });
             }
         }
@@ -162,11 +233,11 @@ fn check_dense_body(content: &str, findings: &mut Vec<StyleFinding>) {
         return;
     }
     findings.push(StyleFinding {
+        kind: FindingKind::DenseBody,
         line: 1,
         message: format!(
             "the body runs {width} characters with no blank line anywhere; split it into blocks separated by blank lines so a reader can scan it"
         ),
-        severity: Severity::Warn,
     });
 }
 
@@ -178,9 +249,9 @@ fn check_hard_wraps(content: &str, findings: &mut Vec<StyleFinding>) {
         advice::hard_wrapped_paragraphs(content)
             .into_iter()
             .map(|note| StyleFinding {
+                kind: FindingKind::HardWrap,
                 line: note.line,
                 message: note.message,
-                severity: Severity::Reject,
             }),
     );
 }
@@ -211,11 +282,11 @@ fn check_trailing_metadata(content: &str, findings: &mut Vec<StyleFinding>) {
         return;
     };
     findings.push(StyleFinding {
+        kind: FindingKind::TrailingMetadata,
         line: last.line,
         message: format!(
             "the comment's last block opens with {phrase:?}; move the point inline where it is relevant, or cut it"
         ),
-        severity: Severity::Reject,
     });
 }
 

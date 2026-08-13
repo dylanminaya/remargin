@@ -6713,3 +6713,60 @@ fn reply_inherits_the_comment_advisory_pass() {
         "{result}"
     );
 }
+
+/// An edited body runs the same warn tier a created one does. The bare-id
+/// reference is the discriminator: only the style pass reports it, so a
+/// warning here proves the edit result is no longer on the narrower pass.
+#[test]
+fn edit_attaches_the_style_warn_tier_to_a_successful_result() {
+    let base = Path::new("/docs");
+    let system = system_with_doc(base, "doc.md", "# Hello\n\nSome text.\n");
+    let config = test_config();
+
+    let created = call(
+        &system,
+        base,
+        &config,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1_i32,
+            "method": "tools/call",
+            "params": {
+                "name": "comment",
+                "arguments": { "file": "doc.md", "content": "The first body." }
+            }
+        }),
+    );
+    let id = String::from(extract_tool_text(&created)["id"].as_str().unwrap());
+
+    let response = call(
+        &system,
+        base,
+        &config,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2_i32,
+            "method": "tools/call",
+            "params": {
+                "name": "edit",
+                "arguments": {
+                    "file": "doc.md",
+                    "id": id,
+                    "content": "The recipient list is derived from the parent, as in ow6."
+                }
+            }
+        }),
+    );
+
+    assert!(!is_tool_error(&response));
+    let result = extract_tool_text(&response);
+    let warnings = result["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1_usize, "{result}");
+    assert!(
+        warnings[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("reads as a comment id"),
+        "advisory wording: {result}"
+    );
+}

@@ -6,8 +6,12 @@
 //! fires wrongly is worse than no gate, because the author pays for it by
 //! deleting content until the tool relents.
 
-use super::{Severity, TRAILING_METADATA_OPENERS, gate, notes, review};
+use super::{Severity, TRAILING_METADATA_OPENERS, gate, gate_edit, notes, review};
 use crate::parser::AuthorType;
+
+const CLEAN: &str = "The import form reads its field list from the gateway.\n";
+
+const TRAILING_METADATA: &str = "The gate runs at the write seam.\n\nOne thing: the sidebar shows a badge nobody asked about.\n";
 
 const HARD_WRAPPED: &str = "The import form and the generate form both read their field list from the\n\
                             gateway, so a change to either one has to land in both controllers.\n";
@@ -17,7 +21,7 @@ fn hard_wrapped_paragraph_is_reject_tier() {
     let findings = review(HARD_WRAPPED);
 
     assert_eq!(findings.len(), 1, "{findings:?}");
-    assert_eq!(findings[0].severity, Severity::Reject);
+    assert_eq!(findings[0].kind.severity(), Severity::Reject);
     assert_eq!(findings[0].line, 1);
 }
 
@@ -108,7 +112,7 @@ fn a_bare_comment_id_reference_warns_without_blocking() {
     let findings = review(body);
 
     assert_eq!(findings.len(), 1, "{findings:?}");
-    assert_eq!(findings[0].severity, Severity::Warn);
+    assert_eq!(findings[0].kind.severity(), Severity::Warn);
     gate(body, &AuthorType::Agent).unwrap();
     assert_eq!(notes(body).len(), 1, "the warning reaches the author");
 }
@@ -137,7 +141,7 @@ fn a_dense_body_warns_without_blocking() {
     let findings = review(&body);
 
     assert_eq!(findings.len(), 1, "{findings:?}");
-    assert_eq!(findings[0].severity, Severity::Warn);
+    assert_eq!(findings[0].kind.severity(), Severity::Warn);
     gate(&body, &AuthorType::Agent).unwrap();
 }
 
@@ -167,4 +171,80 @@ fn a_well_shaped_comment_earns_no_findings() {
 fn an_empty_body_earns_no_findings() {
     assert_eq!(review(""), Vec::new());
     gate("", &AuthorType::Agent).unwrap();
+}
+
+#[test]
+fn an_edit_adding_a_hard_wrap_is_refused_with_the_line_and_the_fix() {
+    let err = gate_edit(CLEAN, HARD_WRAPPED, &AuthorType::Agent)
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains("line 1"), "names the offending line: {err}");
+    assert!(err.contains("one continuous line"), "states the fix: {err}");
+}
+
+#[test]
+fn a_human_edit_adding_the_same_wrap_is_accepted() {
+    gate_edit(CLEAN, HARD_WRAPPED, &AuthorType::Human).unwrap();
+}
+
+#[test]
+fn an_edit_repairing_the_body_is_accepted() {
+    gate_edit(HARD_WRAPPED, CLEAN, &AuthorType::Agent).unwrap();
+}
+
+#[test]
+fn an_edit_repairing_one_of_two_wraps_is_accepted() {
+    let old = format!("{HARD_WRAPPED}\n{HARD_WRAPPED}");
+    let new = format!("{HARD_WRAPPED}\n{CLEAN}");
+
+    assert_eq!(review(&old).len(), 2, "the fixture carries two wraps");
+    gate_edit(&old, &new, &AuthorType::Agent).unwrap();
+}
+
+#[test]
+fn an_edit_holding_an_inherited_wrap_in_place_is_accepted() {
+    let new = "The import form and the generate form both read their field list from the\ngateway, so either change lands in both controllers.\n";
+
+    assert_eq!(review(new).len(), 1, "the new body still carries the wrap");
+    gate_edit(HARD_WRAPPED, new, &AuthorType::Agent).unwrap();
+}
+
+#[test]
+fn an_edit_repairing_one_kind_and_inheriting_another_is_accepted() {
+    let old = format!("{HARD_WRAPPED}\n{TRAILING_METADATA}");
+    let new = format!("{CLEAN}\n{TRAILING_METADATA}");
+
+    gate_edit(&old, &new, &AuthorType::Agent).unwrap();
+}
+
+#[test]
+fn an_edit_adding_a_second_wrap_to_a_body_that_already_had_one_is_refused() {
+    let new = format!("{HARD_WRAPPED}\n{HARD_WRAPPED}");
+
+    gate_edit(HARD_WRAPPED, &new, &AuthorType::Agent).unwrap_err();
+}
+
+#[test]
+fn an_edit_adding_one_kind_is_refused_even_when_another_kind_falls() {
+    let old = format!("{HARD_WRAPPED}\n{HARD_WRAPPED}");
+    let new = format!("{HARD_WRAPPED}\n{TRAILING_METADATA}");
+
+    let err = gate_edit(&old, &new, &AuthorType::Agent)
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains("one thing"), "quotes the added phrase: {err}");
+    assert!(
+        !err.contains("one continuous line"),
+        "the surviving wrap is inherited, so it is not held against the editor: {err}"
+    );
+}
+
+#[test]
+fn an_edit_earning_only_a_warning_is_accepted() {
+    let new = "The recipient list is derived from the parent, as in ow6.\n";
+
+    gate_edit(CLEAN, new, &AuthorType::Agent).unwrap();
+    assert_eq!(notes(new).len(), 1, "the warning reaches the editor");
 }

@@ -2094,7 +2094,9 @@ fn handle_edit(
         new_kinds.as_deref(),
     )?;
     let mut result = responses::comment_edited(comment_id);
-    advice::attach(&mut result, new_content);
+    // The same advisory pass a created body gets, so a warn-tier finding
+    // reaches an editor too.
+    advice::attach_notes(&mut result, &comment_style::notes(new_content));
     Ok(result)
 }
 

@@ -4185,3 +4185,174 @@ fn no_config_state_turns_the_refusal_off() {
         );
     }
 }
+
+/// A document whose single comment carries `body` verbatim.
+fn doc_with_body(body: &str) -> String {
+    format!(
+        "\
+---
+title: Test
+author: eduardo
+---
+
+# Test Document
+
+```remargin
+---
+id: abc
+author: eduardo
+type: human
+ts: 2026-04-06T12:00:00-04:00
+checksum: sha256:old
+---
+{body}```
+"
+    )
+}
+
+#[test]
+fn agent_edit_introducing_a_hard_wrap_is_refused_and_writes_nothing() {
+    let system = system_with_doc(&doc_with_body("One line, no wrap.\n"));
+    let path = Path::new("/docs/test.md");
+    let before = read_file(&system, path);
+
+    let err = edit_comment(
+        &system,
+        path,
+        &typed_config(AuthorType::Agent),
+        "abc",
+        HARD_WRAPPED_BODY,
+        None,
+    )
+    .unwrap_err();
+
+    let msg = format!("{err:#}");
+    assert!(msg.contains("line 1"), "names the offending line: {msg}");
+    assert!(msg.contains("one continuous line"), "states the fix: {msg}");
+    assert_eq!(before, read_file(&system, path));
+}
+
+#[test]
+fn agent_edit_introducing_trailing_metadata_is_refused() {
+    let system = system_with_doc(&doc_with_body("One line, no wrap.\n"));
+    let path = Path::new("/docs/test.md");
+    let before = read_file(&system, path);
+    let body = "The gate runs at the write seam.\n\nOne thing: the sidebar shows a badge nobody asked about.\n";
+
+    let err = edit_comment(
+        &system,
+        path,
+        &typed_config(AuthorType::Agent),
+        "abc",
+        body,
+        None,
+    )
+    .unwrap_err();
+
+    let msg = format!("{err:#}");
+    assert!(msg.contains("one thing"), "quotes the phrase: {msg}");
+    assert_eq!(before, read_file(&system, path));
+}
+
+#[test]
+fn human_edit_introducing_a_hard_wrap_is_written() {
+    let system = system_with_doc(&doc_with_body("One line, no wrap.\n"));
+    let path = Path::new("/docs/test.md");
+
+    edit_comment(
+        &system,
+        path,
+        &typed_config(AuthorType::Human),
+        "abc",
+        HARD_WRAPPED_BODY,
+        None,
+    )
+    .unwrap();
+
+    let doc = parser::parse_file(&system, path).unwrap();
+    assert_eq!(
+        doc.find_comment("abc").unwrap().content,
+        HARD_WRAPPED_BODY.trim_end()
+    );
+}
+
+#[test]
+fn agent_edit_repairing_a_hard_wrapped_body_is_written() {
+    let system = system_with_doc(&doc_with_body(HARD_WRAPPED_BODY));
+    let path = Path::new("/docs/test.md");
+    let body =
+        "The import form and the generate form both read their field list from the gateway.\n";
+
+    edit_comment(
+        &system,
+        path,
+        &typed_config(AuthorType::Agent),
+        "abc",
+        body,
+        None,
+    )
+    .unwrap();
+
+    let doc = parser::parse_file(&system, path).unwrap();
+    assert_eq!(doc.find_comment("abc").unwrap().content, body.trim_end());
+}
+
+#[test]
+fn agent_edit_leaving_a_pre_existing_hard_wrap_alone_is_written() {
+    let system = system_with_doc(&doc_with_body(HARD_WRAPPED_BODY));
+    let path = Path::new("/docs/test.md");
+    let body = "The import form and the generate form both read their field list from the\ngateway, so either change has to land in both controllers.\n";
+
+    edit_comment(
+        &system,
+        path,
+        &typed_config(AuthorType::Agent),
+        "abc",
+        body,
+        None,
+    )
+    .unwrap();
+
+    let doc = parser::parse_file(&system, path).unwrap();
+    assert_eq!(doc.find_comment("abc").unwrap().content, body.trim_end());
+}
+
+#[test]
+fn agent_edit_earning_only_a_warning_is_written() {
+    let system = system_with_doc(&doc_with_body("One line, no wrap.\n"));
+    let path = Path::new("/docs/test.md");
+    let body = "The recipient list is derived from the parent, as in ow6.\n";
+
+    edit_comment(
+        &system,
+        path,
+        &typed_config(AuthorType::Agent),
+        "abc",
+        body,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(comment_style::notes(body).len(), 1, "the editor is told");
+    let doc = parser::parse_file(&system, path).unwrap();
+    assert_eq!(doc.find_comment("abc").unwrap().content, body.trim_end());
+}
+
+#[test]
+fn no_config_state_turns_the_edit_refusal_off() {
+    let path = Path::new("/docs/test.md");
+
+    for mode in [Mode::Open, Mode::Registered, Mode::Strict] {
+        let system = system_with_doc(&doc_with_body("One line, no wrap.\n"));
+        let config = ResolvedConfig {
+            mode: mode.clone(),
+            unrestricted: true,
+            ..typed_config(AuthorType::Agent)
+        };
+
+        assert!(
+            edit_comment(&system, path, &config, "abc", HARD_WRAPPED_BODY, None).is_err(),
+            "{mode:?} with unrestricted still refuses a hard-wrapped agent edit"
+        );
+    }
+}
