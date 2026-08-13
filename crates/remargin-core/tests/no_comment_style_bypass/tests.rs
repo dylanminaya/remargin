@@ -16,6 +16,23 @@ const EDIT_GATE_SIGNATURE: &str = "pub fn gate_edit(old_content: &str, new_conte
 const EDIT_ENTRY_POINT: &str = "pub fn edit_comment(";
 const EDIT_GATE_CALL: &str = "comment_style::gate_edit(";
 
+/// The create path's entry point, and the call it has to carry.
+const CREATE_ENTRY_POINT: &str = "pub fn create_comment(";
+const GATE_CALL: &str = "comment_style::gate(";
+
+/// Every hop from a projection that authors a body down to the gate, as
+/// (function, call its body must carry). A projection is what an agent is
+/// told to trust before it commits, so one that reaches a write surface
+/// without the gate reports the opposite of what the write will do. Batch
+/// gates through a preflight helper, so both hops are pinned — cutting
+/// either one severs the chain.
+const PROJECTION_GATE_CHAIN: &[(&str, &str)] = &[
+    ("pub fn project_batch(", "preflight_batch_ops("),
+    ("fn preflight_batch_ops(", GATE_CALL),
+    ("pub fn project_comment(", GATE_CALL),
+    ("pub fn project_edit(", EDIT_GATE_CALL),
+];
+
 /// Tokens that must not appear in the gate's module. Each one is a way for
 /// caller-supplied state to reach a decision that may only be made from the
 /// body and the author type.
@@ -33,6 +50,10 @@ fn gate_module() -> PathBuf {
 
 fn operations_module() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/operations.rs")
+}
+
+fn projections_module() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/operations/projections.rs")
 }
 
 fn read(path: &Path) -> String {
@@ -87,6 +108,40 @@ fn the_edit_path_runs_the_edit_gate() {
          so a body the gate refused on creation can be written through the \
          edit path instead.",
         path.display()
+    );
+}
+
+#[test]
+fn the_create_path_runs_the_gate() {
+    let path = operations_module();
+    let source = read(&path);
+
+    assert!(
+        function_body(&source, CREATE_ENTRY_POINT).is_some_and(|body| body.contains(GATE_CALL)),
+        "{} no longer reaches {GATE_CALL:?} from {CREATE_ENTRY_POINT:?}, so a \
+         body the gate refuses can be written on creation.",
+        path.display()
+    );
+}
+
+#[test]
+fn every_projection_path_runs_the_same_gate_its_write_runs() {
+    let path = projections_module();
+    let source = read(&path);
+
+    let mut misses: Vec<String> = Vec::new();
+    for &(function, required_call) in PROJECTION_GATE_CHAIN {
+        if !function_body(&source, function).is_some_and(|body| body.contains(required_call)) {
+            misses.push(format!("{function:?} does not reach {required_call:?}"));
+        }
+    }
+
+    assert!(
+        misses.is_empty(),
+        "a projection that skips the gate predicts success for a body the \
+         write refuses. Offenders in {}:\n{}",
+        path.display(),
+        misses.join("\n")
     );
 }
 

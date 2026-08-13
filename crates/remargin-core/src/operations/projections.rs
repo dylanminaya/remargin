@@ -27,6 +27,7 @@ use chrono::Utc;
 use os_shim::System;
 use serde_yaml::Value;
 
+use crate::comment_style;
 use crate::config::ResolvedConfig;
 use crate::crypto::{compute_checksum, compute_signature};
 use crate::frontmatter;
@@ -313,8 +314,8 @@ pub fn project_ack(
 ///
 /// Surfaces the same preflight diagnostics `batch_comment` would:
 /// missing identity, post-permission rejection, malformed linter state,
-/// any sub-op's `auto_ack` without `reply_to`, or a sub-op's
-/// `reply_to` pointing at a missing parent.
+/// any sub-op's `auto_ack` without `reply_to`, a sub-op body the style
+/// gate refuses, or a sub-op's `reply_to` pointing at a missing parent.
 pub fn project_batch(
     system: &dyn System,
     path: &Path,
@@ -326,19 +327,14 @@ pub fn project_batch(
         .as_deref()
         .context("identity is required to create comments")?;
 
+    let author_type = config.author_type.clone().unwrap_or(AuthorType::Human);
+
     let (before, mut after) = parse_file_twice(system, path)?;
 
     linter::lint_or_fail(&after.to_markdown()?)
         .context("document has structural issues before plan batch")?;
 
-    // Preflight the whole list before any mutation so we surface the
-    // failing sub-op index without leaving half the ops applied in
-    // `after` on a preventable rejection.
-    for (idx, op) in operations.iter().enumerate() {
-        if matches!(op.auto_ack, Some(true)) && op.reply_to.is_none() {
-            bail!("batch sub-op {idx}: auto_ack requires reply_to");
-        }
-    }
+    preflight_batch_ops(operations, &author_type)?;
 
     let now = Utc::now().fixed_offset();
     let mut line_shifts: Vec<(usize, usize)> = Vec::new();
@@ -377,7 +373,7 @@ pub fn project_batch(
             ack: Vec::new(),
             attachments: resolved_attachments,
             author: String::from(identity),
-            author_type: config.author_type.clone().unwrap_or(AuthorType::Human),
+            author_type: author_type.clone(),
             checksum,
             content: op.content.clone(),
             edited_at: None,
@@ -460,7 +456,8 @@ pub fn project_batch(
 ///
 /// Surfaces the same preflight diagnostics `create_comment` would:
 /// missing identity, post-permission rejection, malformed linter state,
-/// invalid reply target, auto-ack without `reply_to`.
+/// invalid reply target, auto-ack without `reply_to`, a body the style
+/// gate refuses.
 pub fn project_comment(
     system: &dyn System,
     path: &Path,
@@ -477,6 +474,7 @@ pub fn project_comment(
     }
 
     let author_type = config.author_type.clone().unwrap_or(AuthorType::Human);
+    comment_style::gate(params.content, &author_type)?;
 
     let (before, mut after) = parse_file_twice(system, path)?;
 
@@ -652,9 +650,10 @@ pub fn project_delete(
 /// # Errors
 ///
 /// Surfaces the same diagnostics `edit_comment` would on its pre-commit
-/// path: missing comment id, frontmatter issues. Missing identity is
-/// *not* an error here because `edit_comment` only consults identity for
-/// signature decisions, which the projection skips.
+/// path: missing comment id, a replacement body the style gate refuses
+/// under the same non-worsening rule, frontmatter issues. Missing
+/// identity is *not* an error here because `edit_comment` only consults
+/// identity for signature decisions, which the projection skips.
 pub fn project_edit(
     system: &dyn System,
     path: &Path,
@@ -666,6 +665,11 @@ pub fn project_edit(
 
     let cm = find_comment_mut(&mut after, comment_id)
         .with_context(|| format!("comment {comment_id:?} not found"))?;
+
+    // Keyed on the editor rather than the comment's original author,
+    // matching `edit_comment`: whoever writes this body answers for it.
+    let editor_type = config.author_type.clone().unwrap_or(AuthorType::Human);
+    comment_style::gate_edit(&cm.content, new_content, &editor_type)?;
 
     cm.content = String::from(new_content);
     // Preserve existing remargin_kind on edit, matching `edit_comment`.
@@ -983,6 +987,22 @@ fn ensure_markdown_path(path: &Path) -> Result<()> {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
     if !is_md {
         bail!("not a markdown file");
+    }
+    Ok(())
+}
+
+/// Refuse the whole projection before any sub-op is applied when one is
+/// malformed or its body fails the reject tier. Mirrors
+/// [`crate::operations::batch`]'s own preflight; the style refusal carries
+/// the live path's context verbatim, so the preview reads back word for
+/// word as the write that follows it.
+fn preflight_batch_ops(operations: &[ProjectBatchOp], author_type: &AuthorType) -> Result<()> {
+    for (idx, op) in operations.iter().enumerate() {
+        if matches!(op.auto_ack, Some(true)) && op.reply_to.is_none() {
+            bail!("batch sub-op {idx}: auto_ack requires reply_to");
+        }
+        comment_style::gate(&op.content, author_type)
+            .with_context(|| format!("batch operation {idx}"))?;
     }
     Ok(())
 }

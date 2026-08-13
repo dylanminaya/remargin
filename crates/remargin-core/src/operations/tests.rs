@@ -11,8 +11,8 @@ use os_shim::mock::MockSystem;
 use crate::comment_style;
 use crate::config::{Mode, ResolvedConfig};
 use crate::operations::{
-    CreateCommentParams, ack_comments, create_comment, delete_comments, edit_comment, projections,
-    react, sandbox as sandbox_ops, sign,
+    CreateCommentParams, ack_comments, batch as batch_ops, create_comment, delete_comments,
+    edit_comment, projections, react, sandbox as sandbox_ops, sign,
 };
 use crate::parser::{self, AuthorType};
 use crate::writer::{FORBIDDEN_TARGETS, InsertPosition};
@@ -4355,4 +4355,166 @@ fn no_config_state_turns_the_edit_refusal_off() {
             "{mode:?} with unrestricted still refuses a hard-wrapped agent edit"
         );
     }
+}
+
+// ---------------------------------------------------------------------
+// The same gate on the projection side. A preview that predicts success
+// for a body the write refuses is wrong output, so each projection is
+// asserted against the refusal its own mutating sibling produces —
+// message included, since the message is what the caller acts on.
+// ---------------------------------------------------------------------
+
+#[test]
+fn agent_plan_of_a_hard_wrapped_comment_is_refused_with_the_live_message() {
+    let system = system_with_doc(MINIMAL_DOC);
+    let path = Path::new("/docs/test.md");
+    let config = typed_config(AuthorType::Agent);
+    let position = InsertPosition::Append;
+
+    let live = create_comment(
+        &system,
+        path,
+        &config,
+        &CreateCommentParams::new(HARD_WRAPPED_BODY, &position),
+    )
+    .unwrap_err();
+
+    let params = projections::ProjectCommentParams::new(HARD_WRAPPED_BODY, &position);
+    let projected = projections::project_comment(&system, path, &config, &params).unwrap_err();
+
+    assert_eq!(format!("{projected:#}"), format!("{live:#}"));
+}
+
+#[test]
+fn agent_plan_of_a_hard_wrapped_reply_is_refused() {
+    let system = system_with_doc(&doc_with_comment());
+    let position = InsertPosition::AfterComment(String::from("abc"));
+    let params = projections::ProjectCommentParams::new(HARD_WRAPPED_BODY, &position)
+        .with_reply_to(Some("abc"));
+
+    let err = projections::project_comment(
+        &system,
+        Path::new("/docs/test.md"),
+        &typed_config(AuthorType::Agent),
+        &params,
+    )
+    .unwrap_err();
+
+    let msg = format!("{err:#}");
+    assert!(msg.contains("comment body rejected"), "{msg}");
+}
+
+#[test]
+fn human_plan_of_a_hard_wrapped_comment_is_projected() {
+    let system = system_with_doc(MINIMAL_DOC);
+    let position = InsertPosition::Append;
+    let params = projections::ProjectCommentParams::new(HARD_WRAPPED_BODY, &position);
+
+    let (_before, after) = projections::project_comment(
+        &system,
+        Path::new("/docs/test.md"),
+        &typed_config(AuthorType::Human),
+        &params,
+    )
+    .unwrap();
+
+    assert_eq!(after.comments().len(), 1);
+}
+
+#[test]
+fn agent_plan_of_a_batch_with_a_hard_wrapped_body_is_refused_with_the_live_message() {
+    let system = system_with_doc(MINIMAL_DOC);
+    let path = Path::new("/docs/test.md");
+    let config = typed_config(AuthorType::Agent);
+
+    let live = batch_ops::batch_comment(
+        &system,
+        path,
+        &config,
+        &[
+            batch_ops::BatchCommentOp::new(String::from("One clean line.")),
+            batch_ops::BatchCommentOp::new(String::from(HARD_WRAPPED_BODY)),
+        ],
+    )
+    .unwrap_err();
+
+    let projected = projections::project_batch(
+        &system,
+        path,
+        &config,
+        &[
+            projections::ProjectBatchOp::new(String::from("One clean line.")),
+            projections::ProjectBatchOp::new(String::from(HARD_WRAPPED_BODY)),
+        ],
+    )
+    .unwrap_err();
+
+    assert_eq!(format!("{projected:#}"), format!("{live:#}"));
+}
+
+#[test]
+fn human_plan_of_a_batch_with_a_hard_wrapped_body_is_projected() {
+    let system = system_with_doc(MINIMAL_DOC);
+    let ops = [projections::ProjectBatchOp::new(String::from(
+        HARD_WRAPPED_BODY,
+    ))];
+
+    let (_before, after) = projections::project_batch(
+        &system,
+        Path::new("/docs/test.md"),
+        &typed_config(AuthorType::Human),
+        &ops,
+    )
+    .unwrap();
+
+    assert_eq!(after.comments().len(), 1);
+}
+
+#[test]
+fn agent_plan_of_an_edit_introducing_a_hard_wrap_is_refused_with_the_live_message() {
+    let system = system_with_doc(&doc_with_body("One line, no wrap.\n"));
+    let path = Path::new("/docs/test.md");
+    let config = typed_config(AuthorType::Agent);
+
+    let live = edit_comment(&system, path, &config, "abc", HARD_WRAPPED_BODY, None).unwrap_err();
+    let projected =
+        projections::project_edit(&system, path, &config, "abc", HARD_WRAPPED_BODY).unwrap_err();
+
+    assert_eq!(format!("{projected:#}"), format!("{live:#}"));
+}
+
+#[test]
+fn agent_plan_of_an_edit_leaving_a_pre_existing_hard_wrap_alone_is_projected() {
+    let system = system_with_doc(&doc_with_body(HARD_WRAPPED_BODY));
+    let body = "The import form and the generate form both read their field list from the\ngateway, so either change has to land in both controllers.\n";
+
+    let (_before, after) = projections::project_edit(
+        &system,
+        Path::new("/docs/test.md"),
+        &typed_config(AuthorType::Agent),
+        "abc",
+        body,
+    )
+    .unwrap();
+
+    assert_eq!(after.find_comment("abc").unwrap().content, body);
+}
+
+#[test]
+fn human_plan_of_an_edit_introducing_a_hard_wrap_is_projected() {
+    let system = system_with_doc(&doc_with_body("One line, no wrap.\n"));
+
+    let (_before, after) = projections::project_edit(
+        &system,
+        Path::new("/docs/test.md"),
+        &typed_config(AuthorType::Human),
+        "abc",
+        HARD_WRAPPED_BODY,
+    )
+    .unwrap();
+
+    assert_eq!(
+        after.find_comment("abc").unwrap().content,
+        HARD_WRAPPED_BODY
+    );
 }

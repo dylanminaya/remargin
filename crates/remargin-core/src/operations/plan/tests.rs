@@ -1,13 +1,17 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use os_shim::mock::MockSystem;
 
 use super::{
-    PlanIdentity, diff_comment_sets, project_doc_report, project_report, whole_file_checksum,
+    PlanIdentity, PlanRequest, diff_comment_sets, dispatch, project_doc_report, project_report,
+    whole_file_checksum,
 };
+use crate::comment_style;
 use crate::config::{Mode, ResolvedConfig};
+use crate::operations::projections::{ProjectBatchOp, ProjectCommentParams};
 use crate::parser;
 use crate::parser::AuthorType;
+use crate::writer::InsertPosition;
 
 // DOC_AAA_BAD_CHECKSUM deliberately keeps the original sha256 value
 // from DOC_ONE_COMMENT while editing the content — the checksum is
@@ -23,6 +27,10 @@ const DOC_AAA_EDITED: &str = "# Test\n\nSome body text here.\n\n```remargin\n---
 const DOC_ONE_COMMENT: &str = "# Test\n\nSome body text here.\n\n```remargin\n---\nid: aaa\nauthor: alice\ntype: human\nts: 2026-04-06T10:00:00-04:00\nchecksum: sha256:0a1b103c177bc33566af5d168667a855f3ffa3c3fd9748424bfa3b3512e6bfdb\n---\nFirst comment.\n```\n";
 
 const DOC_TWO_COMMENTS: &str = "# Test\n\nSome body text here.\n\n```remargin\n---\nid: aaa\nauthor: alice\ntype: human\nts: 2026-04-06T10:00:00-04:00\nchecksum: sha256:0a1b103c177bc33566af5d168667a855f3ffa3c3fd9748424bfa3b3512e6bfdb\n---\nFirst comment.\n```\n\n```remargin\n---\nid: bbb\nauthor: bob\ntype: human\nts: 2026-04-06T11:00:00-04:00\nchecksum: sha256:91f4d2a3dce415f7e893f7d93f37be404da42b1a7a1133ef759ab3fe747ad726\n---\nSecond comment.\n```\n";
+
+/// The one warn-tier body the plan tests share: a reference by id, which
+/// the gate reports and never refuses.
+const WARNING_BODY: &str = "The recipient list is derived from the parent, as in ow6.\n";
 
 fn open_config() -> ResolvedConfig {
     ResolvedConfig {
@@ -275,4 +283,95 @@ fn project_doc_report_escalates_mode_to_realm_yaml() {
     let gate = report.subset_gate.unwrap();
     assert_eq!(gate.mode, "strict");
     assert!(!report.would_commit);
+}
+
+fn system_with_one_comment() -> MockSystem {
+    MockSystem::new()
+        .with_file(Path::new("/docs/test.md"), DOC_ONE_COMMENT.as_bytes())
+        .unwrap()
+}
+
+#[test]
+fn plan_of_a_comment_reports_the_warn_tier_notes_the_live_write_reports() {
+    let position = InsertPosition::Append;
+    let request = PlanRequest::Comment {
+        path: PathBuf::from("/docs/test.md"),
+        params: ProjectCommentParams::new(WARNING_BODY, &position),
+    };
+
+    let report = dispatch(
+        &system_with_one_comment(),
+        Path::new("/docs"),
+        &open_config(),
+        &request,
+    )
+    .unwrap();
+
+    let notes: Vec<_> = report.warnings.iter().map(|w| w.note.clone()).collect();
+    assert_eq!(notes, comment_style::notes(WARNING_BODY));
+    assert!(report.warnings.iter().all(|w| w.op == 0));
+}
+
+#[test]
+fn plan_of_an_edit_reports_the_warn_tier_notes_the_live_edit_reports() {
+    let request = PlanRequest::Edit {
+        path: PathBuf::from("/docs/test.md"),
+        id: "aaa",
+        content: WARNING_BODY,
+    };
+
+    let report = dispatch(
+        &system_with_one_comment(),
+        Path::new("/docs"),
+        &open_config(),
+        &request,
+    )
+    .unwrap();
+
+    let notes: Vec<_> = report.warnings.iter().map(|w| w.note.clone()).collect();
+    assert_eq!(notes, comment_style::notes(WARNING_BODY));
+}
+
+#[test]
+fn plan_of_a_batch_tags_each_warn_tier_note_with_its_sub_op() {
+    let request = PlanRequest::Batch {
+        path: PathBuf::from("/docs/test.md"),
+        ops: vec![
+            ProjectBatchOp::new(String::from("One clean line.\n")),
+            ProjectBatchOp::new(String::from(WARNING_BODY)),
+        ],
+    };
+
+    let report = dispatch(
+        &system_with_one_comment(),
+        Path::new("/docs"),
+        &open_config(),
+        &request,
+    )
+    .unwrap();
+
+    assert_eq!(
+        report.warnings.len(),
+        comment_style::notes(WARNING_BODY).len()
+    );
+    assert!(report.warnings.iter().all(|w| w.op == 1));
+}
+
+#[test]
+fn plan_of_a_clean_body_reports_no_warnings() {
+    let position = InsertPosition::Append;
+    let request = PlanRequest::Comment {
+        path: PathBuf::from("/docs/test.md"),
+        params: ProjectCommentParams::new("One clean line.\n", &position),
+    };
+
+    let report = dispatch(
+        &system_with_one_comment(),
+        Path::new("/docs"),
+        &open_config(),
+        &request,
+    )
+    .unwrap();
+
+    assert!(report.warnings.is_empty());
 }

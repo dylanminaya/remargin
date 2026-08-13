@@ -27,6 +27,8 @@ use os_shim::System;
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
+use crate::advice::OpAdvice;
+use crate::comment_style;
 use crate::config::{Mode, ResolvedConfig};
 use crate::document::allowlist;
 use crate::document::{self, WriteOptions, WriteProjection};
@@ -291,6 +293,14 @@ pub struct PlanReport {
     /// Full post-op verify report computed against the projected
     /// document under the active mode.
     pub verify_after: PlanVerifyReport,
+    /// Warn-tier style notes the projected bodies earned, each tagged
+    /// with the sub-op it came from (`0` for the single-body ops). The
+    /// reject tier is already spent by the time a report exists — it
+    /// refuses the projection outright — so this is only ever advice
+    /// about a body that would land, never a failure signal. Empty for
+    /// every op that authors no body.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<OpAdvice>,
     /// Aggregate verdict: `true` when the op would land successfully
     /// under the current mode and invariants.
     pub would_commit: bool,
@@ -971,6 +981,7 @@ pub fn project_report(
         subset_gate,
         unprotect_diff: None,
         verify_after,
+        warnings: Vec::new(),
         would_commit,
     })
 }
@@ -1035,6 +1046,7 @@ pub fn project_doc_report(
         subset_gate,
         unprotect_diff: None,
         verify_after,
+        warnings: Vec::new(),
         would_commit,
     })
 }
@@ -1069,11 +1081,17 @@ pub fn dispatch(
         }
         PlanRequest::Batch { path, ops } => {
             let (before, after) = projections::project_batch(system, path, cfg, ops)?;
-            project_doc_report(system, path, label, &before, &after, cfg, identity)
+            let mut report =
+                project_doc_report(system, path, label, &before, &after, cfg, identity)?;
+            report.warnings = body_warnings(ops.iter().map(|op| op.content.as_str()));
+            Ok(report)
         }
         PlanRequest::Comment { path, params } => {
             let (before, after) = projections::project_comment(system, path, cfg, params)?;
-            project_doc_report(system, path, label, &before, &after, cfg, identity)
+            let mut report =
+                project_doc_report(system, path, label, &before, &after, cfg, identity)?;
+            report.warnings = body_warnings([params.content]);
+            Ok(report)
         }
         PlanRequest::Delete { path, ids } => {
             let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
@@ -1085,7 +1103,10 @@ pub fn dispatch(
         }
         PlanRequest::Edit { path, id, content } => {
             let (before, after) = projections::project_edit(system, path, cfg, id, content)?;
-            project_doc_report(system, path, label, &before, &after, cfg, identity)
+            let mut report =
+                project_doc_report(system, path, label, &before, &after, cfg, identity)?;
+            report.warnings = body_warnings([*content]);
+            Ok(report)
         }
         PlanRequest::Mv { src, dst, force } => {
             dispatch_mv(system, base_dir, cfg, identity, src, dst, *force)
@@ -1195,6 +1216,22 @@ fn dispatch_unprotect(
         }
     }
     Ok(report)
+}
+
+/// The warn tier every projected body earns, tagged with its position in
+/// the request. Reached only after the projection succeeded, so the
+/// reject tier is already spent and everything here is advice about a
+/// body that would land.
+fn body_warnings<'body>(bodies: impl IntoIterator<Item = &'body str>) -> Vec<OpAdvice> {
+    bodies
+        .into_iter()
+        .enumerate()
+        .flat_map(|(idx, body)| {
+            comment_style::notes(body)
+                .into_iter()
+                .map(move |note| OpAdvice::new(idx, note))
+        })
+        .collect()
 }
 
 /// Build a [`PlanReport`] for the `cp` op.
