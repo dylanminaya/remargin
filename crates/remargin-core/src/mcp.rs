@@ -1953,8 +1953,12 @@ fn handle_batch(
     enforce_ack_skip_reasons(system, base_dir, cfg, file, &ack_gate)?;
 
     let path = base_dir.join(file);
-    let ids = operations::batch::batch_comment(system, &path, cfg, &batch_ops)?;
-    Ok(responses::batch(&ids))
+    let outcome = operations::batch::batch_comment(system, &path, cfg, &batch_ops)?;
+    // The same advisory pass the single-comment path runs, with each note
+    // naming the operation whose body earned it.
+    let mut result = responses::batch(&outcome.ids);
+    advice::attach_op_notes(&mut result, &outcome.warnings);
+    Ok(result)
 }
 
 /// Handle the `comment` tool: create a single comment.

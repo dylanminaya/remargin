@@ -16,6 +16,7 @@ use chrono::Utc;
 use os_shim::System;
 use serde_json::{Map, Value};
 
+use crate::advice::OpAdvice;
 use crate::comment_style;
 use crate::config::ResolvedConfig;
 use crate::crypto::{compute_checksum, compute_signature};
@@ -28,6 +29,20 @@ use crate::parser::{self, Acknowledgment, AuthorType, Comment, ParsedDocument};
 use crate::permissions::op_guard::pre_mutate_check_for_caller;
 use crate::reactions::Reactions;
 use crate::writer::{self, InsertPosition};
+
+/// What a batch wrote, and what its bodies earned in passing.
+///
+/// The reject tier refuses the whole batch before anything is written, so
+/// everything here describes a batch that already succeeded: `warnings`
+/// is advice about bodies that are now on disk, never a failure signal.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct BatchOutcome {
+    /// IDs of the created comments, in operation order.
+    pub ids: Vec<String>,
+    /// Warn-tier style notes, each naming the operation it came from.
+    pub warnings: Vec<OpAdvice>,
+}
 
 /// A single comment creation operation within a batch.
 #[derive(Debug)]
@@ -156,7 +171,8 @@ impl BatchCommentOp {
 /// Parses the document once, applies all operations, writes once.
 /// If any operation fails, nothing is written.
 ///
-/// Returns the list of created IDs in order.
+/// Returns the created IDs in order, plus any warn-tier style notes the
+/// bodies earned.
 ///
 /// # Errors
 ///
@@ -170,7 +186,7 @@ pub fn batch_comment(
     path: &Path,
     config: &ResolvedConfig,
     operations: &[BatchCommentOp],
-) -> Result<Vec<String>> {
+) -> Result<BatchOutcome> {
     writer::ensure_not_forbidden_target(path)?;
     // All sub-ops mutate the same `path`, so one guard call covers
     // every sub-op (atomic refusal). If the path becomes restricted,
@@ -198,18 +214,9 @@ pub fn batch_comment(
     linter::lint_or_fail(&markdown_before)
         .context("document has structural issues before write")?;
 
-    // Validate auto_ack=Some(true) requires reply_to before any
-    // modifications, and hold every body to the same style gate the
-    // single-comment path applies — one refused body sinks the batch.
-    for (idx, op) in operations.iter().enumerate() {
-        if matches!(op.auto_ack, Some(true)) && op.reply_to.is_none() {
-            bail!("batch operation {idx}: auto_ack requires reply_to");
-        }
-        comment_style::gate(&op.content, &author_type)
-            .with_context(|| format!("batch operation {idx}"))?;
-    }
+    gate_ops(operations, &author_type)?;
 
-    let mut created_ids: Vec<String> = Vec::new();
+    let mut outcome = BatchOutcome::default();
 
     // Track line shifts from previous AfterLine insertions so subsequent
     // AfterLine targets can be adjusted. Each entry is (original_target_line,
@@ -313,7 +320,16 @@ pub fn batch_comment(
             line_shifts.push((original_target, lines_added));
         }
 
-        created_ids.push(new_id);
+        // The warn tier the single-comment path reports, scoped to the op
+        // that earned it: with several bodies in one call, a line number
+        // alone does not say which one to go fix.
+        outcome.warnings.extend(
+            comment_style::notes(&op.content)
+                .into_iter()
+                .map(|note| OpAdvice::new(idx, note)),
+        );
+
+        outcome.ids.push(new_id);
     }
 
     frontmatter::ensure_frontmatter(&mut doc, cfg)?;
@@ -322,9 +338,23 @@ pub fn batch_comment(
     linter::lint_or_fail(&markdown_after)
         .context("document has structural issues after batch write")?;
 
-    write_batch_result(system, path, cfg, &doc, &created_ids)?;
+    write_batch_result(system, path, cfg, &doc, &outcome.ids)?;
 
-    Ok(created_ids)
+    Ok(outcome)
+}
+
+/// Refuse the whole batch before anything is written when a sub-op is
+/// malformed or its body fails the reject tier the single-comment path
+/// applies — one refused body sinks the batch.
+fn gate_ops(operations: &[BatchCommentOp], author_type: &AuthorType) -> Result<()> {
+    for (idx, op) in operations.iter().enumerate() {
+        if matches!(op.auto_ack, Some(true)) && op.reply_to.is_none() {
+            bail!("batch operation {idx}: auto_ack requires reply_to");
+        }
+        comment_style::gate(&op.content, author_type)
+            .with_context(|| format!("batch operation {idx}"))?;
+    }
+    Ok(())
 }
 
 /// Write the batch result with preservation check + post-mutation verify gate.

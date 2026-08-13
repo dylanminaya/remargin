@@ -118,7 +118,9 @@ fn simple_batch() {
         },
     ];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
     assert_eq!(ids.len(), 3);
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
@@ -142,7 +144,9 @@ fn batch_with_reply() {
         to: Vec::new(),
     }];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
     assert_eq!(ids.len(), 1);
 
     let reply_ops = vec![BatchCommentOp {
@@ -156,8 +160,9 @@ fn batch_with_reply() {
         to: Vec::new(),
     }];
 
-    let reply_ids =
-        batch_comment(&system, Path::new("/docs/test.md"), &config, &reply_ops).unwrap();
+    let reply_ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &reply_ops)
+        .unwrap()
+        .ids;
     assert_eq!(reply_ids.len(), 1);
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
@@ -239,7 +244,9 @@ Existing comment.
         to: Vec::new(),
     }];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
     assert_eq!(ids.len(), 1);
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
@@ -278,7 +285,9 @@ fn batch_two_after_line_comments_both_placed_correctly() {
         },
     ];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
     assert_eq!(ids.len(), 2);
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
@@ -338,7 +347,9 @@ fn batch_after_line_reverse_order() {
         },
     ];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
     assert_eq!(ids.len(), 2);
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
@@ -396,7 +407,9 @@ fn batch_three_after_line_same_region() {
         },
     ];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
     assert_eq!(ids.len(), 3);
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
@@ -461,7 +474,9 @@ fn batch_mixed_after_line_and_append() {
         },
     ];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
     assert_eq!(ids.len(), 3);
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
@@ -537,7 +552,9 @@ Line after comment.
         },
     ];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
     assert_eq!(ids.len(), 2);
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
@@ -587,7 +604,9 @@ fn batch_two_after_same_line() {
         },
     ];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
     assert_eq!(ids.len(), 2);
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
@@ -622,7 +641,9 @@ fn batch_after_line_beyond_document_length() {
         to: Vec::new(),
     }];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
     assert_eq!(ids.len(), 1);
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
     let doc = parser::parse(&content).unwrap();
@@ -649,8 +670,8 @@ fn batch_after_line_zero() {
 
     // This should either work (insert at top) or error gracefully — not corrupt.
     let result = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops);
-    if let Ok(ids) = result {
-        assert_eq!(ids.len(), 1);
+    if let Ok(outcome) = result {
+        assert_eq!(outcome.ids.len(), 1);
         let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
         let doc = parser::parse(&content).unwrap();
         assert_eq!(doc.comments().len(), 1);
@@ -701,7 +722,9 @@ fn batch_auto_ack_single_op() {
         to: Vec::new(),
     }];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
     assert_eq!(ids.len(), 1);
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
@@ -750,7 +773,9 @@ fn batch_auto_ack_mixed_ops() {
         },
     ];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
     assert_eq!(ids.len(), 3);
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
@@ -779,8 +804,9 @@ fn batch_auto_ack_forward_reference() {
         to: Vec::new(),
     }];
 
-    let parent_ids =
-        batch_comment(&system, Path::new("/docs/test.md"), &config, &parent_ops).unwrap();
+    let parent_ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &parent_ops)
+        .unwrap()
+        .ids;
 
     let reply_ops = vec![BatchCommentOp {
         after_comment: None,
@@ -793,8 +819,9 @@ fn batch_auto_ack_forward_reference() {
         to: Vec::new(),
     }];
 
-    let reply_ids =
-        batch_comment(&system, Path::new("/docs/test.md"), &config, &reply_ops).unwrap();
+    let reply_ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &reply_ops)
+        .unwrap()
+        .ids;
     assert_eq!(reply_ids.len(), 1);
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
@@ -864,7 +891,9 @@ Line after comment.
         },
     ];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
     assert_eq!(ids.len(), 2);
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
@@ -958,7 +987,9 @@ End text.
         },
     ];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
     assert_eq!(ids.len(), 3);
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
@@ -1124,7 +1155,9 @@ fn batch_reply_auto_populates_to() {
         to: Vec::new(),
     }];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
     let doc = parser::parse(&content).unwrap();
@@ -1154,7 +1187,9 @@ fn batch_reply_explicit_to() {
         to: vec![String::from("bob")],
     }];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
     let doc = parser::parse(&content).unwrap();
@@ -1258,7 +1293,9 @@ fn batch_recipient_gate_in_batch_reply_to_active_author_allowed() {
         },
     ];
 
-    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+    let ids = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops)
+        .unwrap()
+        .ids;
     assert_eq!(ids.len(), 2, "both ops should succeed");
 
     let content = system.read_to_string(Path::new("/docs/test.md")).unwrap();
@@ -1296,4 +1333,68 @@ fn one_refused_body_sinks_the_whole_agent_batch() {
             .is_empty(),
         "the clean op is not written either"
     );
+}
+
+#[test]
+fn a_warned_body_names_the_op_it_came_from_and_still_gets_written() {
+    let system = system_with_doc(MINIMAL_DOC);
+    let path = Path::new("/docs/test.md");
+    let config = ResolvedConfig {
+        author_type: Some(AuthorType::Agent),
+        ..open_config()
+    };
+    let ops = vec![
+        BatchCommentOp::new(String::from("A clean single-line body.")),
+        BatchCommentOp::new(String::from("See a5q for the field list.")),
+    ];
+
+    let outcome = batch_comment(&system, path, &config, &ops).unwrap();
+
+    assert_eq!(outcome.ids.len(), 2, "the warn tier never blocks the write");
+    assert_eq!(outcome.warnings.len(), 1, "{:?}", outcome.warnings);
+    let warning = &outcome.warnings[0];
+    assert_eq!(warning.op, 1);
+    assert_eq!(warning.note.line, 1);
+    assert!(
+        warning.note.message.contains("a5q"),
+        "names the token: {}",
+        warning.note.message
+    );
+    assert_eq!(
+        parser::parse_file(&system, path).unwrap().comments().len(),
+        2
+    );
+}
+
+#[test]
+fn a_batch_of_clean_bodies_has_nothing_to_warn_about() {
+    let system = system_with_doc(MINIMAL_DOC);
+    let config = ResolvedConfig {
+        author_type: Some(AuthorType::Agent),
+        ..open_config()
+    };
+    let ops = vec![
+        BatchCommentOp::new(String::from("A clean single-line body.")),
+        BatchCommentOp::new(String::from("Another one, equally clean.")),
+    ];
+
+    let outcome = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+}
+
+/// A human author is exempt from the reject tier but not from the warn
+/// tier — advice is offered to everyone, it just never blocks anyone.
+#[test]
+fn a_human_authored_batch_still_earns_its_warn_tier_notes() {
+    let system = system_with_doc(MINIMAL_DOC);
+    let config = open_config();
+    let ops = vec![BatchCommentOp::new(String::from(
+        "See a5q for the field list.",
+    ))];
+
+    let outcome = batch_comment(&system, Path::new("/docs/test.md"), &config, &ops).unwrap();
+
+    assert_eq!(outcome.warnings.len(), 1, "{:?}", outcome.warnings);
+    assert_eq!(outcome.warnings[0].op, 0);
 }

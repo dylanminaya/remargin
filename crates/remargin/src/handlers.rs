@@ -778,8 +778,21 @@ pub fn cmd_batch(
         batch_ops.push(BatchCommentOp::from_json_object(op_obj, idx)?);
     }
 
-    let created_ids = operations::batch::batch_comment(system, &path, config, &batch_ops)?;
-    print_output(sinks, json_mode, &responses::batch(&created_ids))
+    let outcome = operations::batch::batch_comment(system, &path, config, &batch_ops)?;
+
+    // Advisory only, exactly as `comment` handles it: stderr in text mode
+    // so it never contaminates stdout, the payload in `--json` mode, and
+    // never the exit code — every comment is already on disk by now.
+    let mut result = responses::batch(&outcome.ids);
+    if json_mode {
+        advice::attach_op_notes(&mut result, &outcome.warnings);
+    } else {
+        let text = advice::format_op_text(&outcome.warnings);
+        if !text.is_empty() {
+            write!(sinks.stderr, "{text}").context("writing advice to stderr")?;
+        }
+    }
+    print_output(sinks, json_mode, &result)
 }
 
 fn resolve_comment_position(

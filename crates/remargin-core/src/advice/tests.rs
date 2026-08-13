@@ -5,7 +5,9 @@
 //! genuine content. Advice nobody is obliged to follow earns its keep only
 //! by being quiet when it has nothing to say.
 
-use super::{Advice, format_text, offset_lines, review};
+use serde_json::json;
+
+use super::{Advice, OpAdvice, attach_op_notes, format_op_text, format_text, offset_lines, review};
 
 #[test]
 fn flags_a_hard_wrapped_paragraph_at_its_first_line() {
@@ -163,4 +165,58 @@ fn format_text_labels_each_note_as_advice() {
     }];
 
     assert_eq!(format_text(&notes), "advice: line 411: say something\n");
+}
+
+#[test]
+fn format_op_text_names_the_operation_ahead_of_the_line() {
+    let notes = vec![OpAdvice::new(
+        1,
+        Advice {
+            line: 3,
+            message: String::from("say something"),
+        },
+    )];
+
+    assert_eq!(
+        format_op_text(&notes),
+        "advice: op 1, line 3: say something\n"
+    );
+}
+
+#[test]
+fn format_op_text_is_empty_when_there_is_nothing_to_say() {
+    assert_eq!(format_op_text(&[]), "");
+}
+
+#[test]
+fn attach_op_notes_carries_the_op_alongside_line_and_message() {
+    let mut result = json!({ "ids": ["a1x", "b2y"] });
+
+    attach_op_notes(
+        &mut result,
+        &[OpAdvice::new(
+            1,
+            Advice {
+                line: 3,
+                message: String::from("say something"),
+            },
+        )],
+    );
+
+    assert_eq!(
+        result,
+        json!({
+            "ids": ["a1x", "b2y"],
+            "warnings": [{ "op": 1_i32, "line": 3_i32, "message": "say something" }],
+        })
+    );
+}
+
+#[test]
+fn attach_op_notes_leaves_a_clean_result_untouched() {
+    let mut result = json!({ "ids": ["a1x"] });
+
+    attach_op_notes(&mut result, &[]);
+
+    assert_eq!(result, json!({ "ids": ["a1x"] }));
 }

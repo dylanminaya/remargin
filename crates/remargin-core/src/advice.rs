@@ -28,6 +28,28 @@ pub struct Advice {
     pub message: String,
 }
 
+/// One advisory note about a batch, tagged with the operation that earned
+/// it.
+///
+/// `op` is the zero-based index into the request's operations array — the
+/// one handle the caller holds for every operation, including the ones
+/// that produced no id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct OpAdvice {
+    /// The note itself.
+    pub note: Advice,
+    /// Zero-based index of the operation the note belongs to.
+    pub op: usize,
+}
+
+impl OpAdvice {
+    #[must_use]
+    pub const fn new(op: usize, note: Advice) -> Self {
+        Self { note, op }
+    }
+}
+
 /// One run of consecutive lines that are the author's own prose.
 ///
 /// Fenced code, blockquotes, tables, lists and headings are not prose and
@@ -77,6 +99,23 @@ pub fn to_json(notes: &[Advice]) -> Value {
     )
 }
 
+/// The op-scoped notes as the `warnings` JSON array: the `line`/`message`
+/// pair a single-op surface emits, plus the `op` that earned it.
+fn op_to_json(notes: &[OpAdvice]) -> Value {
+    Value::Array(
+        notes
+            .iter()
+            .map(|entry| {
+                json!({
+                    "op": entry.op,
+                    "line": entry.note.line,
+                    "message": entry.note.message,
+                })
+            })
+            .collect(),
+    )
+}
+
 /// Attach the notes for `content` to an already-successful result under
 /// `warnings`, leaving the result untouched when there is nothing to say.
 ///
@@ -93,6 +132,14 @@ pub fn attach_notes(result: &mut Value, notes: &[Advice]) {
     }
 }
 
+/// [`attach_notes`] for a multi-operation result, whose notes each name
+/// the operation they came from.
+pub fn attach_op_notes(result: &mut Value, notes: &[OpAdvice]) {
+    if !notes.is_empty() {
+        result["warnings"] = op_to_json(notes);
+    }
+}
+
 /// Render notes as the human-facing text block, one note per line.
 ///
 /// Empty string when there is nothing to say, so callers can print it
@@ -102,6 +149,20 @@ pub fn format_text(notes: &[Advice]) -> String {
     let mut buf = String::new();
     for note in notes {
         let _ = writeln!(buf, "advice: line {}: {}", note.line, note.message);
+    }
+    buf
+}
+
+/// [`format_text`] for op-scoped notes, which lead with the operation.
+#[must_use]
+pub fn format_op_text(notes: &[OpAdvice]) -> String {
+    let mut buf = String::new();
+    for entry in notes {
+        let _ = writeln!(
+            buf,
+            "advice: op {}, line {}: {}",
+            entry.op, entry.note.line, entry.note.message
+        );
     }
     buf
 }

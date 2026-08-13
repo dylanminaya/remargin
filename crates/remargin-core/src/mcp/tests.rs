@@ -5573,6 +5573,82 @@ fn mcp_batch_rejects_multiple_anchors_per_op() {
     assert!(is_tool_error(&resp));
 }
 
+#[test]
+fn mcp_batch_warns_against_the_op_whose_body_earned_the_note() {
+    let base = Path::new("/docs");
+    let system = system_with_doc(base, "doc.md", DOC_WITH_HEADINGS);
+    let config = test_config();
+
+    let resp = call(
+        &system,
+        base,
+        &config,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1_i32,
+            "method": "tools/call",
+            "params": {
+                "name": "batch",
+                "arguments": {
+                    "file": "doc.md",
+                    "operations": [
+                        { "content": "A clean single-line body." },
+                        { "content": "See a5q for the field list." }
+                    ]
+                }
+            }
+        }),
+    );
+    assert!(!is_tool_error(&resp), "{resp:?}");
+
+    let payload = extract_tool_text(&resp);
+    assert_eq!(payload["ids"].as_array().unwrap().len(), 2);
+    let warnings = payload["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(warnings[0]["op"], 1_u64);
+    assert_eq!(warnings[0]["line"], 1_u64);
+    assert!(
+        warnings[0]["message"].as_str().unwrap().contains("a5q"),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn mcp_batch_omits_warnings_when_every_body_reads_cleanly() {
+    let base = Path::new("/docs");
+    let system = system_with_doc(base, "doc.md", DOC_WITH_HEADINGS);
+    let config = test_config();
+
+    let resp = call(
+        &system,
+        base,
+        &config,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1_i32,
+            "method": "tools/call",
+            "params": {
+                "name": "batch",
+                "arguments": {
+                    "file": "doc.md",
+                    "operations": [
+                        { "content": "A clean single-line body." },
+                        { "content": "Another one, equally clean." }
+                    ]
+                }
+            }
+        }),
+    );
+    assert!(!is_tool_error(&resp), "{resp:?}");
+
+    let payload = extract_tool_text(&resp);
+    assert_eq!(payload["ids"].as_array().unwrap().len(), 2);
+    assert!(
+        payload.get("warnings").is_none(),
+        "a clean batch keeps the payload it has always had: {payload}"
+    );
+}
+
 /// `mv` MCP tool moves a file and reports the documented outcome
 /// shape.
 #[test]
