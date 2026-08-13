@@ -8,7 +8,7 @@ Given a file path, process the file under its resolved system prompt.
 
 ## Steps
 
-1. **Check activity first.** Call `mcp__remargin__activity` with `path` = the file. Read the full delta since your last action on this file — reactions, acks on threads you're in, comments addressed to others, edits, signatures landed since you last looked. Pending-for-me is only one slice of the picture; everything else lives in activity and may change what your reply should say. See remargin skill Critical rule 12.
+1. **Check activity first.** Call `mcp__remargin__activity` with `path` = the file. Read the full delta since your last action on this file — reactions, acks on threads you're in, comments addressed to others, edits, signatures landed since you last looked. Pending-for-me is only one slice of the picture; everything else lives in activity and may change what your reply should say. See remargin skill Critical rule 6.
 
 2. **Resolve the system prompt.** Call `mcp__remargin__prompt_resolve` with the given path. The result contains the prompt name and body. The resolver falls back to a locked Default body when the `.remargin.yaml` walk exhausts.
 

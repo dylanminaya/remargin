@@ -1,6 +1,6 @@
 # Comment style
 
-How to write a comment body so a human can read it. Critical rule 15 states the requirements; this file holds the heuristic and the worked examples.
+How to write a comment body so a human can read it. Critical rule 9 states the requirements; this file holds the heuristic and the worked examples.
 
 ## Why this exists
 
@@ -26,7 +26,7 @@ None of those comments was missing information. Each one was missing *shape* —
 | Ordered procedure | Numbered list |
 | Code, config, command output, wire payload | Fenced block with a language tag |
 | One topic with distinct phases | `###` headings |
-| Distinct topics | Separate replies (rule 3), never headings |
+| Distinct topics | Separate replies (rule 12), never headings |
 
 A horizontal rule (`---`) between major blocks of a long comment is welcome.
 
@@ -78,4 +78,4 @@ A one-line answer still stays one line. This is about matching shape to content,
 
 ## Self-containment
 
-Rule 17 covers it: no comment IDs, no acronyms, no invented shorthand, no pointing at another comment or section instead of restating what it said. Formatting and self-containment fail together — a comment that says "the other 12 routes" is both unstructured and unanswerable. Fix both at once by writing the list.
+Rule 10 covers it: no comment IDs, no acronyms, no invented shorthand, no pointing at another comment or section instead of restating what it said. Formatting and self-containment fail together — a comment that says "the other 12 routes" is both unstructured and unanswerable. Fix both at once by writing the list.

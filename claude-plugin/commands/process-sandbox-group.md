@@ -10,7 +10,7 @@ Given a system-prompt name, process every sandboxed file in this vault that reso
 
 1. **Enumerate currently-sandboxed files via activity.** Call `mcp__remargin__activity` with `path` = the vault scope (or the directory you're processing) and `pretty: true`. The result is a timestamp-sorted stream of events (comments, acks, edits, sandbox-adds, sandbox-removes) across **all identities**. Extract:
    - **Sandboxed set:** files whose most recent sandbox event is a `sandbox-add` with no later `sandbox-remove` by the same identity. This is the set to process.
-   - **Recent context:** reactions on threads you're in, acks on your comments, comments addressed to others, edits, and signatures landed since your last action. Hold this for step 4 (per-file processing) — it's what your replies need to take into account. See remargin skill Critical rule 12.
+   - **Recent context:** reactions on threads you're in, acks on your comments, comments addressed to others, edits, and signatures landed since your last action. Hold this for step 4 (per-file processing) — it's what your replies need to take into account. See remargin skill Critical rule 6.
 
    **Do not use `sandbox_list` for enumeration here.** It is caller-scoped and returns only the caller's own sandbox. In the typical agent-processing workflow the human user stages files for the agent — those won't appear in the agent's `sandbox_list`. `activity` sees stages by every identity, which is what this skill needs.
 
