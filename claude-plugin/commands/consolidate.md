@@ -26,7 +26,21 @@ Re-create a managed markdown file so its body reflects **everything** in its com
    - **Preserve (default):** you **cannot** whole-file `write` a commented document. Comment blocks are pinned at their lines; re-create the body by rewriting the **prose around** them — partial-line `mcp__remargin__write` (bottom-up, last gap first; never include a comment block's lines) plus `mcp__remargin__replace` for substitutions. Follow [the skill's rewriting-whole-files.md](../skills/remargin/rewriting-whole-files.md) exactly. Comment blocks stay anchored where they are; consolidation does not move or ack them.
    - **Delete:** after the body is re-created, remove every comment via `mcp__remargin__delete` (by id) or `mcp__remargin__purge`. With comments gone you may then rewrite the body freely (whole-file `write` is fine once no comment blocks remain).
 
-8. **Return a structured summary.** Requester + entity type, authorization result, mode (preserve/delete), threads read, how each was classified, body sections rewritten, and comments preserved or deleted.
+8. **Return a receipt, not a summary.** The chat message proves the round ran and shows the queue state. Nothing else.
+
+   ```
+   notes/generated_types.md — consolidated (preserve · human requester)
+
+   | found   | 14 threads · 9 settled · 3 open · 2 discardable |
+   | actions | sections rewritten 6 · comments preserved 14 |
+   | after   | 8 inbound pending · 6 awaiting your ack |
+   ```
+
+   Counts only — no thread text, no ids, and no per-thread classification list. Drop any row whose counts are all zero. In delete mode the `actions` row reads `comments deleted 14` instead.
+
+   **Never restate, quote, summarize, or paraphrase comment or reply content in chat** — no per-thread tables, no "where I disagreed with you", no decision recaps, no list of body changes. The consolidated document *is* the report; the receipt only proves it was rewritten.
+
+   Two things stay in chat, because they are *not* in the document: **blockers** — a declined authorization (step 2), or a thread you could not reconcile — and anything that **needs the owner's decision**. One line each, with why. Nothing else.
 
 ## Constraints
 

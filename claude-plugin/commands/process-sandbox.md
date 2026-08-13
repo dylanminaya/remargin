@@ -19,7 +19,29 @@ Vault-wide sandbox processing. Each prompt group runs in an isolated subagent co
    2. Wait for the subagent to complete. Capture its summary.
    3. Move to the next group. Do NOT do groups in parallel — sequential subagents preserve the user's ability to follow what's happening.
 
-4. **Aggregate.** Combine each subagent's outcome into a single vault-level summary: groups processed, files successfully processed, files left sandboxed due to failure, per-group outcomes.
+4. **Return a receipt, not a summary.** The chat message proves the round ran and shows the queue state. Nothing else.
+
+   One summed vault-level receipt, then a per-file `found`/`actions` table:
+
+   ```
+   vault — sandbox processed · 3 files · 2 groups
+
+   | found   | 14 to me · 3 broadcast · 9 to others |
+   | actions | replied 17 · acked 5 · body edits 4 · unsandboxed 2 |
+   | after   | 0 inbound pending · 11 awaiting your ack · 1 left sandboxed |
+
+   | file                     | found                | actions              |
+   | ------------------------ | -------------------- | -------------------- |
+   | notes/generated_types.md | 10 to me · 2 bcast   | replied 12 · acked 3 |
+   | notes/schema_review.md   | 3 to me · 1 bcast    | replied 4 · acked 2  |
+   | specs/emit_plan.md       | 1 to me              | replied 1 · edits 1  |
+   ```
+
+   With a single file processed, emit the summed receipt alone. Counts only — no comment text, no ids. Drop any row whose counts are all zero. Nothing sandboxed → a single line saying so.
+
+   **Never restate, quote, summarize, or paraphrase comment or reply content in chat** — no per-comment tables, no "where I disagreed with you", no decision recaps, no list of document changes, and no relay of a subagent's own narration. If it was worth saying, it is already in the document.
+
+   Two things stay in chat, because they are *not* in the document: **blockers** — every file left sandboxed by a failure, plus any op that was denied — and anything that **needs the owner's decision**. One line each, with why. Nothing else.
 
 ## Constraints
 

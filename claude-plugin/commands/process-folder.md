@@ -21,7 +21,39 @@ Activity-driven folder processing. Awareness comes first — the full activity d
 
 5. **Do NOT touch sandbox markers.** This command is activity-driven, not sandbox-driven — it neither requires nor clears sandbox state. This is the key behavioral difference from `/remargin:process-sandbox`, which removes markers on success.
 
-6. **Aggregate summary.** Files seen in activity, files acted on, pending-to-me/open items resolved, inbound pendings remaining, per-group outcomes.
+6. **Return a receipt, not a summary.** The chat message proves the round ran and shows the queue state. Nothing else.
+
+   One file acted on → one receipt:
+
+   ```
+   notes/generated_types.md — processed
+
+   | found   | 10 to me · 2 broadcast · 5 to others |
+   | actions | replied 12 · acked 3 · body edits 2 · issues filed 1 |
+   | after   | 0 inbound pending · 6 awaiting your ack |
+   ```
+
+   Several files acted on → one summed receipt for the run, then a per-file `found`/`actions` table:
+
+   ```
+   notes/ — processed · 3 of 9 files · 2 groups
+
+   | found   | 14 to me · 3 broadcast · 9 to others |
+   | actions | replied 17 · acked 5 · body edits 4 |
+   | after   | 0 inbound pending · 11 awaiting your ack |
+
+   | file                     | found                | actions              |
+   | ------------------------ | -------------------- | -------------------- |
+   | notes/generated_types.md | 10 to me · 2 bcast   | replied 12 · acked 3 |
+   | notes/schema_review.md   | 3 to me · 1 bcast    | replied 4 · acked 2  |
+   | specs/emit_plan.md       | 1 to me              | replied 1 · edits 1  |
+   ```
+
+   Counts only — no comment text, no ids. Drop any row whose counts are all zero. Files activity surfaced but that carried nothing actionable are the difference between the two file counts in the header line, never a list. Nothing actionable at all → a single line saying so.
+
+   **Never restate, quote, summarize, or paraphrase comment or reply content in chat** — no per-comment tables, no "where I disagreed with you", no decision recaps, no list of document changes, and no relay of a subagent's own narration. If it was worth saying, it is already in the document.
+
+   Two things stay in chat, because they are *not* in the document: **blockers** (an op that was denied, or a comment no subagent could act on) and anything that **needs the owner's decision**. One line each, with why. Nothing else.
 
 ## Constraints
 

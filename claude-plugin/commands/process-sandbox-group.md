@@ -25,7 +25,29 @@ Given a system-prompt name, process every sandboxed file in this vault that reso
 
 5. **Verify no inbound pendings remain across the group (defense-in-depth).** Call `mcp__remargin__query` with `pending: true` against the common ancestor directory of the processed files. The only pending entries should be replies you (the caller) posted, awaiting the other party's ack. Any **inbound** pending — a comment by an author other than you on a file you marked as successfully processed — is a contract violation by the per-file skill. Surface it loudly in the summary and reopen the affected file(s) before declaring done.
 
-6. **Return a structured summary.** Files attempted, files successfully processed, files left sandboxed due to failure, per-file outcomes, and an explicit "0 inbound pendings across the group" confirmation (or the list of leaks).
+6. **Return a receipt, not a summary.** The chat message proves the round ran and shows the queue state. Nothing else.
+
+   One summed receipt for the group, then a per-file `found`/`actions` table:
+
+   ```
+   document_reviewer — 3 files attempted
+
+   | found   | 14 to me · 3 broadcast · 9 to others |
+   | actions | replied 17 · acked 5 · body edits 4 · unsandboxed 2 |
+   | after   | 0 inbound pending · 11 awaiting your ack · 1 left sandboxed |
+
+   | file                     | found                | actions              |
+   | ------------------------ | -------------------- | -------------------- |
+   | notes/generated_types.md | 10 to me · 2 bcast   | replied 12 · acked 3 |
+   | notes/schema_review.md   | 3 to me · 1 bcast    | replied 4 · acked 2  |
+   | specs/emit_plan.md       | 1 to me              | replied 1 · edits 1  |
+   ```
+
+   With a single file attempted, emit the summed receipt alone. Counts only — no comment text, no ids. Drop any row whose counts are all zero. The `after` row carries step 5's inbound-pending verification; no file matched the prompt → a single line saying so.
+
+   **Never restate, quote, summarize, or paraphrase comment or reply content in chat** — no per-comment tables, no "where I disagreed with you", no decision recaps, no list of document changes, and no relay of the per-file skill's own narration. If it was worth saying, it is already in the document.
+
+   Two things stay in chat, because they are *not* in the document: **blockers** — every file left sandboxed by a failure, every inbound-pending leak found in step 5, and any op that was denied — and anything that **needs the owner's decision**. One line each, with why. Nothing else.
 
 ## Constraints
 

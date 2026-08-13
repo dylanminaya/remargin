@@ -22,7 +22,21 @@ Given a file path, process the file under its resolved system prompt.
 
 6. **Verify no inbound pendings remain.** Call `mcp__remargin__comments` with `file` = the path (again, not `query` — same gitignore blindness). Inspect every comment still shown as pending: pending replies you just posted (where `author` == your identity from `mcp__remargin__whoami`) are expected and OK — they're awaiting the other party's ack. Any **inbound** pending (a comment whose `author` is someone else) means you skipped its reply. Go back to step 4 and address it. **Do not move to step 7 with inbound pendings outstanding.**
 
-7. **Return a structured summary.** Files touched, comments replied to, comments acked, ops performed. Explicitly confirm "0 inbound pendings remaining."
+7. **Return a receipt, not a summary.** The chat message proves the round ran and shows the queue state. Nothing else.
+
+   ```
+   notes/generated_types.md — processed
+
+   | found   | 10 to me · 2 broadcast · 5 to others |
+   | actions | replied 12 · acked 3 · body edits 2 · issues filed 1 |
+   | after   | 0 inbound pending · 6 awaiting your ack |
+   ```
+
+   Counts only — no comment text, no ids. Drop any row whose counts are all zero. The `after` row carries step 6's "0 inbound pending" confirmation.
+
+   **Never restate, quote, summarize, or paraphrase comment or reply content in chat** — no per-comment tables, no "where I disagreed with you", no decision recaps, no list of document changes. If it was worth saying, it is already in the document.
+
+   Two things stay in chat, because they are *not* in the document: **blockers** (an op that was denied, or a comment you could not act on) and anything that **needs the owner's decision**. One line each, with why. Nothing else.
 
 ## Constraints
 
