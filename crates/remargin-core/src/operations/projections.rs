@@ -43,7 +43,7 @@ use crate::permissions::op_guard::pre_mutate_check_for_caller;
 use crate::reactions::{Reactions, ReactionsExt as _};
 use crate::writer::{self, InsertPosition};
 
-/// One sub-op inside a [`project_batch`] request: same shape as
+/// One operation inside a [`project_batch`] request: same shape as
 /// [`crate::operations::batch::BatchCommentOp`] except attachments become
 /// `attachment_filenames` (plan never copies bytes).
 #[derive(Debug, Clone)]
@@ -67,7 +67,7 @@ pub struct ProjectBatchOp {
 }
 
 impl ProjectBatchOp {
-    /// Decode a single plan-batch sub-op JSON object into a
+    /// Decode a single plan-batch operation JSON object into a
     /// [`ProjectBatchOp`]. Mirrors
     /// [`BatchCommentOp::from_json_object`](crate::operations::batch::BatchCommentOp::from_json_object)
     /// but produces the attachment-filenames (plan never copies bytes).
@@ -145,7 +145,7 @@ impl ProjectBatchOp {
         })
     }
 
-    /// Minimum-viable sub-op with just content. Other fields default to
+    /// Minimum-viable operation with just content. Other fields default to
     /// empty / false.
     #[must_use]
     pub const fn new(content: String) -> Self {
@@ -297,25 +297,26 @@ pub fn project_ack(
 
 /// Projection sibling of [`crate::operations::batch::batch_comment`].
 ///
-/// Applies every sub-op to an in-memory copy of the document in order,
+/// Applies every operation to an in-memory copy of the document in order,
 /// using the same `after_line` shift bookkeeping the real op does. No
 /// disk writes, no attachment copies, no signatures.
 ///
-/// the real `batch_comment` is atomic: if any sub-op fails,
-/// nothing is written. The projection mirrors that: the first sub-op
-/// whose preflight rejects stops the walk — earlier sub-ops remain
+/// the real `batch_comment` is atomic: if any operation fails,
+/// nothing is written. The projection mirrors that: the first operation
+/// whose preflight rejects stops the walk — earlier operations remain
 /// applied in the returned `after` so the caller can see the partial
 /// state, but the caller is expected to inspect the returned error and
-/// act accordingly. Per-sub-op preflight errors are surfaced prefixed
-/// with the failing sub-op index so callers can route the rejection
+/// act accordingly. Per-operation preflight errors are surfaced prefixed
+/// with the failing operation index so callers can route the rejection
 /// back to the offending entry.
 ///
 /// # Errors
 ///
 /// Surfaces the same preflight diagnostics `batch_comment` would:
 /// missing identity, post-permission rejection, malformed linter state,
-/// any sub-op's `auto_ack` without `reply_to`, a sub-op body the style
-/// gate refuses, or a sub-op's `reply_to` pointing at a missing parent.
+/// any operation's `auto_ack` without `reply_to`, an operation body the
+/// style gate refuses, or an operation's `reply_to` pointing at a missing
+/// parent.
 pub fn project_batch(
     system: &dyn System,
     path: &Path,
@@ -394,12 +395,12 @@ pub fn project_batch(
         let lines_before = after.to_markdown()?.matches('\n').count();
 
         writer::insert_comment(&mut after, comment, &position)
-            .with_context(|| format!("batch sub-op {idx}: inserting comment"))?;
+            .with_context(|| format!("batch operation {idx}: inserting comment"))?;
 
         if let Some(parent_id) = op.reply_to.as_deref() {
             let should_ack = {
                 let parent = after.find_comment(parent_id).with_context(|| {
-                    format!("batch sub-op {idx}: auto-ack parent {parent_id:?} not found")
+                    format!("batch operation {idx}: auto-ack parent {parent_id:?} not found")
                 })?;
                 match op.auto_ack {
                     Some(true) => true,
@@ -410,7 +411,7 @@ pub fn project_batch(
             if should_ack {
                 let lines_before_ack = after.to_markdown()?.matches('\n').count();
                 let parent = find_comment_mut(&mut after, parent_id).with_context(|| {
-                    format!("batch sub-op {idx}: auto-ack parent {parent_id:?} not found")
+                    format!("batch operation {idx}: auto-ack parent {parent_id:?} not found")
                 })?;
                 parent.ack.push(Acknowledgment {
                     author: String::from(identity),
@@ -991,15 +992,15 @@ fn ensure_markdown_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Refuse the whole projection before any sub-op is applied when one is
-/// malformed or its body fails the reject tier. Mirrors
-/// [`crate::operations::batch`]'s own preflight; the style refusal carries
-/// the live path's context verbatim, so the preview reads back word for
-/// word as the write that follows it.
+/// Refuse the whole projection before any operation is applied when one
+/// is malformed or its body fails the reject tier. Mirrors
+/// [`crate::operations::batch`]'s own preflight; every refusal carries the
+/// live path's context verbatim, so the preview reads back word for word
+/// as the write that follows it.
 fn preflight_batch_ops(operations: &[ProjectBatchOp], author_type: &AuthorType) -> Result<()> {
     for (idx, op) in operations.iter().enumerate() {
         if matches!(op.auto_ack, Some(true)) && op.reply_to.is_none() {
-            bail!("batch sub-op {idx}: auto_ack requires reply_to");
+            bail!("batch operation {idx}: auto_ack requires reply_to");
         }
         comment_style::gate(&op.content, author_type)
             .with_context(|| format!("batch operation {idx}"))?;
@@ -1007,7 +1008,7 @@ fn preflight_batch_ops(operations: &[ProjectBatchOp], author_type: &AuthorType) 
     Ok(())
 }
 
-/// Resolve the insertion position for a batch sub-op, adjusting any
+/// Resolve the insertion position for a batch operation, adjusting any
 /// `after_line` target for lines added by previous insertions in the
 /// same batch. Mirrors the private helper in
 /// [`crate::operations::batch`]. `reply_to` always wins over explicit

@@ -2574,8 +2574,8 @@ fn project_batch_auto_ack_without_reply_rejects_with_index() {
         .unwrap_err();
     let msg = format!("{err:#}");
     assert!(
-        msg.contains("sub-op 0"),
-        "rejection must name the failing sub-op index: {msg}"
+        msg.contains("operation 0"),
+        "rejection must name the failing operation index: {msg}"
     );
 }
 
@@ -4448,6 +4448,24 @@ fn agent_plan_of_a_batch_with_a_hard_wrapped_body_is_refused_with_the_live_messa
         ],
     )
     .unwrap_err();
+
+    assert_eq!(format!("{projected:#}"), format!("{live:#}"));
+}
+
+#[test]
+fn plan_of_a_batch_auto_ack_without_reply_to_is_refused_with_the_live_message() {
+    let system = system_with_doc(MINIMAL_DOC);
+    let path = Path::new("/docs/test.md");
+    let config = typed_config(AuthorType::Human);
+
+    let mut live_op = batch_ops::BatchCommentOp::new(String::from("Missing reply_to."));
+    live_op.auto_ack = Some(true);
+    let live = batch_ops::batch_comment(&system, path, &config, &[live_op]).unwrap_err();
+
+    let mut projected_op = projections::ProjectBatchOp::new(String::from("Missing reply_to."));
+    projected_op.auto_ack = Some(true);
+    let projected =
+        projections::project_batch(&system, path, &config, &[projected_op]).unwrap_err();
 
     assert_eq!(format!("{projected:#}"), format!("{live:#}"));
 }
