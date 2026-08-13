@@ -12,11 +12,11 @@ Vault-wide sandbox processing. Each prompt group runs in an isolated subagent co
 
    **Do not use `sandbox_list` for enumeration here.** It is caller-scoped and returns only the caller's own sandbox. In the typical agent-processing workflow the human user stages files for the agent — those won't appear in the agent's `sandbox_list`. `activity` sees stages by every identity.
 
-2. **Group by prompt.** For each file, call `mcp__remargin__prompt_resolve` and bucket by the resolved prompt name. If no files are sandboxed, return a summary saying so and exit.
+2. **Group by prompt.** For each file, call `mcp__remargin__prompt_resolve` and bucket by the resolved prompt name. If no files are sandboxed, emit step 4's nothing-sandboxed single line and exit.
 
 3. **Process each group via a subagent — sequentially.** For each prompt name with at least one sandboxed file:
    1. Spawn a subagent via the `Agent` tool with `subagent_type: "general-purpose"`. The prompt for the subagent: instruct it to process exactly the files in this group, under the resolved system prompt body, following the same flow as `/remargin:process-sandbox-group <prompt-name>`. Include the prompt body inline so the subagent has full context.
-   2. Wait for the subagent to complete. Capture its summary.
+   2. Wait for the subagent to complete. Capture its counts and blockers for the receipt — never its prose.
    3. Move to the next group. Do NOT do groups in parallel — sequential subagents preserve the user's ability to follow what's happening.
 
 4. **Return a receipt, not a summary.** The chat message proves the round ran and shows the queue state. Nothing else.
