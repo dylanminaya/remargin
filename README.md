@@ -1124,7 +1124,9 @@ Contributions are welcome.
 2. **Keep changes focused** — one feature or fix per PR.
 3. **Follow existing patterns** — the codebase uses strict clippy lints (all, pedantic, restriction, nursery levels). Run `cargo clippy` before submitting.
 4. **Write tests** — the project uses `assert_cmd` and `tempfile` for integration tests.
-5. **Update the skill** — if you add or change MCP tools, update `crates/remargin-core/skill/SKILL.md` accordingly.
+5. **Update the skill** — the skill lives at `claude-plugin/skills/remargin/`, and which file you touch depends on what changed:
+   - New or changed op surface (tool, flag, argument) — update `claude-plugin/skills/remargin/tool-reference.md`.
+   - New or changed agent-facing rule or workflow — update `claude-plugin/skills/remargin/SKILL.md` (and `comment-style.md` when it concerns comment writing).
 6. **Commit messages** — conventional commits (`feat:`, `fix:`, `chore:`, etc.).
 
 ### Development setup
