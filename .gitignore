@@ -22,3 +22,4 @@ notes/
 # Remargin identity (workspace-local, not shared)
 .remargin.yaml
 .remargin/
+.beads.gate.lock
