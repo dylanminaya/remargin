@@ -1,6 +1,7 @@
 import { CommentHeader } from "@/components/sidebar/CommentHeader";
 import { MarkdownContent } from "@/components/sidebar/MarkdownContent";
 import type { Comment } from "@/generated/types";
+import { activationKeyHandler } from "@/lib/keyboardActivation";
 import type { PendingSummary } from "@/lib/pendingState";
 import { CollapseToggle } from "./CollapseToggle";
 
@@ -60,9 +61,16 @@ export function WidgetCommentView({
   const showSummary = collapsed && summary !== undefined && summary.totalReplies > 0;
 
   return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: widget click forwards to the sidebar; keyboard users open the sidebar directly via the existing command (T36 ships only the click bridge).
-    // biome-ignore lint/a11y/noStaticElementInteractions: as above — widget root is a structural container, not an interactive control.
-    <div className="remargin-widget-comment" onClick={handleClick}>
+    // The whole card is the click/keyboard target for the sidebar-focus
+    // bridge; `ignoreEvent()` on the CM6 widget keeps the editor from
+    // eating these keys in Live Preview.
+    <div
+      className="remargin-widget-comment"
+      role="button"
+      tabIndex={0}
+      onClick={handleClick}
+      onKeyDown={activationKeyHandler(handleClick)}
+    >
       <div className="remargin-widget-comment__header">
         <CollapseToggle collapsed={collapsed} onToggle={onToggle} />
         <CommentHeader comment={comment} />

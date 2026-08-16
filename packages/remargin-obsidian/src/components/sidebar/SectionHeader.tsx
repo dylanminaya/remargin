@@ -38,7 +38,13 @@ export function SectionHeader({
         <span className="rmg-l1-head__title">{title}</span>
         {badge != null && <span className="rmg-l1-head__badge">{badge}</span>}
         {actions && (
-          <span className="rmg-l1-head__actions" onClick={(e) => e.stopPropagation()}>
+          // Not a control — keeps action-button clicks (including
+          // keyboard-synthesized ones) from toggling the trigger.
+          <span
+            className="rmg-l1-head__actions"
+            role="presentation"
+            onClick={(e) => e.stopPropagation()}
+          >
             {actions}
           </span>
         )}
@@ -64,8 +70,11 @@ export function SectionHeader({
         )}
       </div>
       {actions && (
+        // Not a control — keeps action-button clicks (including
+        // keyboard-synthesized ones) from toggling the trigger.
         <div
           className="flex items-center gap-1 ml-auto shrink-0"
+          role="presentation"
           onClick={(e) => e.stopPropagation()}
         >
           {actions}

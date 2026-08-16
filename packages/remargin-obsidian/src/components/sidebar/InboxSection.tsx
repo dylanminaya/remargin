@@ -26,6 +26,7 @@ import type { ExpandedComment } from "@/generated";
 import { useBackend } from "@/hooks/useBackend";
 import { useParticipants } from "@/hooks/useParticipants";
 import { authorLabel } from "@/lib/authorLabel";
+import { activationKeyHandler } from "@/lib/keyboardActivation";
 import { collectKinds, matchesKindFilter, pruneKindFilter } from "@/lib/kindFilter";
 import type { InboxFilter, ViewMode } from "@/types";
 
@@ -367,10 +368,14 @@ function InboxFlatRow({ item, me, onOpenAtLine }: InboxFlatRowProps) {
       : visual === "acked-by-me"
         ? "opacity-60"
         : "hover:bg-bg-hover";
+  const open = () => onOpenAtLine?.(item.file, item.comment.line);
   return (
     <div
       className={`flex flex-col gap-1 px-4 py-2 border-b border-bg-border cursor-pointer min-w-0 overflow-hidden ${visualCls}`}
-      onClick={() => onOpenAtLine?.(item.file, item.comment.line)}
+      role="button"
+      tabIndex={0}
+      onClick={open}
+      onKeyDown={activationKeyHandler(open)}
     >
       <div className="flex items-center justify-between gap-2 min-w-0">
         <div className="flex items-center gap-1.5 min-w-0 flex-1">

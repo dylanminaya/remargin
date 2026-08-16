@@ -17,6 +17,7 @@ import type { Comment } from "@/generated";
 import { useParticipants } from "@/hooks/useParticipants";
 import { ackAffordanceFor } from "@/lib/ack-state";
 import { authorLabel } from "@/lib/authorLabel";
+import { activationKeyHandler } from "@/lib/keyboardActivation";
 
 interface CommentCardProps {
   comment: Comment;
@@ -84,11 +85,18 @@ export function CommentCard({
         depth > 0 ? "border-l-2 border-l-accent" : ""
       } ${isClickable ? "cursor-pointer" : ""}`}
       style={{ paddingLeft: `${10 + depth * 16}px` }}
+      role={isClickable ? "button" : undefined}
+      tabIndex={isClickable ? 0 : undefined}
       onClick={() => {
         if (isClickable) {
           onGoToLine?.(comment.line);
         }
       }}
+      onKeyDown={activationKeyHandler(() => {
+        if (isClickable) {
+          onGoToLine?.(comment.line);
+        }
+      })}
     >
       {toTargets.length > 0 && (
         <div className="flex items-center gap-1 flex-wrap">

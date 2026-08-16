@@ -7,6 +7,7 @@ import type { ExpandedComment } from "@/generated";
 import { useParticipants } from "@/hooks/useParticipants";
 import { authorLabel } from "@/lib/authorLabel";
 import { buildFileTree, type FileTreeNode } from "@/lib/buildFileTree";
+import { activationKeyHandler } from "@/lib/keyboardActivation";
 
 interface InboxItem {
   file: string;
@@ -59,11 +60,15 @@ function CommentLeaf({ item, depth, me, onOpenAtLine }: CommentLeafProps) {
       : visual === "acked-by-me"
         ? "opacity-60"
         : "hover:bg-bg-hover";
+  const open = () => onOpenAtLine?.(item.file, item.comment.line);
   return (
     <div
       className={`flex flex-col gap-1 py-2 border-b border-bg-border cursor-pointer ${visualCls}`}
       style={{ paddingLeft: `${16 + depth * 16}px`, paddingRight: "16px" }}
-      onClick={() => onOpenAtLine?.(item.file, item.comment.line)}
+      role="button"
+      tabIndex={0}
+      onClick={open}
+      onKeyDown={activationKeyHandler(open)}
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
@@ -126,7 +131,11 @@ function InboxFileNode({ filePath, comments, depth, isActive, me, onOpenAtLine }
       <div
         className="flex items-center gap-2 py-1.5 hover:bg-bg-hover cursor-pointer border-b border-bg-border"
         style={{ paddingLeft: `${16 + depth * 16}px`, paddingRight: "16px" }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
         onClick={handleClick}
+        onKeyDown={activationKeyHandler(handleClick)}
       >
         {expanded ? (
           <ChevronDown className="w-3 h-3 text-text-faint shrink-0" />
@@ -172,12 +181,20 @@ function InboxDirNode({ node, depth, itemsByFile, activeFile, me, onOpenAtLine }
     .flatMap((fp) => itemsByFile.get(fp) ?? [])
     .filter((i) => i.comment.ack?.length === 0).length;
 
+  const handleClick = () => {
+    setExpanded((prev) => !prev);
+  };
+
   return (
     <>
       <div
         className="flex items-center gap-2 py-1.5 hover:bg-bg-hover cursor-pointer border-b border-bg-border"
         style={{ paddingLeft: `${16 + depth * 16}px`, paddingRight: "16px" }}
-        onClick={() => setExpanded((prev) => !prev)}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={handleClick}
+        onKeyDown={activationKeyHandler(handleClick)}
       >
         {expanded ? (
           <ChevronDown className="w-3 h-3 text-text-faint shrink-0" />

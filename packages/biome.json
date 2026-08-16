@@ -58,7 +58,7 @@
           }
         },
         "useValidAriaValues": "warn",
-        "useKeyWithClickEvents": "off",
+        "useKeyWithClickEvents": "error",
         "noSvgWithoutTitle": "off"
       },
       "complexity": {
