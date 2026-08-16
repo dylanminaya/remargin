@@ -76,7 +76,7 @@ import { asset } from '../lib/url';
 
 <script is:inline>
   (function () {
-    var nav = document.getElementById('nav');
+    const nav = document.getElementById('nav');
     if (!nav) return;
     function onScroll() {
       if (window.scrollY > 8) nav.classList.add('is-solid');

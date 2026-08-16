@@ -1,0 +1,22 @@
+{
+  "root": true,
+  "extends": ["../biome.json"],
+  "html": {
+    "experimentalFullSupportEnabled": true
+  },
+  "files": {
+    "includes": ["**", "!.astro/**"]
+  },
+  "overrides": [
+    {
+      "includes": ["astro.config.mjs"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noDefaultExport": "off"
+          }
+        }
+      }
+    }
+  ]
+}

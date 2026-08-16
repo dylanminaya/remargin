@@ -2,18 +2,17 @@
 import { asset } from '../lib/url';
 import '../styles/global.css';
 
-import Nav from '../components/Nav.astro';
-import Hero from '../components/Hero.astro';
 import Footer from '../components/Footer.astro';
-
+import Hero from '../components/Hero.astro';
+import Nav from '../components/Nav.astro';
+import Anatomy from '../components/sections/Anatomy.astro';
+import Install from '../components/sections/Install.astro';
+import MultiAgent from '../components/sections/MultiAgent.astro';
+import Obsidian from '../components/sections/Obsidian.astro';
+import Permissions from '../components/sections/Permissions.astro';
+import Preservation from '../components/sections/Preservation.astro';
 import Problem from '../components/sections/Problem.astro';
 import Protocol from '../components/sections/Protocol.astro';
-import Anatomy from '../components/sections/Anatomy.astro';
-import MultiAgent from '../components/sections/MultiAgent.astro';
-import Preservation from '../components/sections/Preservation.astro';
-import Permissions from '../components/sections/Permissions.astro';
-import Obsidian from '../components/sections/Obsidian.astro';
-import Install from '../components/sections/Install.astro';
 import Roadmap from '../components/sections/Roadmap.astro';
 
 const title = 'Remargin — a communication protocol for humans and agents';
@@ -65,18 +64,18 @@ const siteUrl = Astro.site ? new URL(import.meta.env.BASE_URL, Astro.site).toStr
   <!-- Copy-to-clipboard for <CodeBlock> components -->
   <script is:inline>
     (function () {
-      var buttons = document.querySelectorAll('.codeblock__copy');
+      const buttons = document.querySelectorAll('.codeblock__copy');
       buttons.forEach(function (btn) {
         btn.addEventListener('click', function () {
-          var block = btn.closest('.codeblock');
+          const block = btn.closest('.codeblock');
           if (!block) return;
-          var code = block.querySelector('pre code');
+          const code = block.querySelector('pre code');
           if (!code) return;
-          var text = code.innerText;
+          const text = code.innerText;
           if (!navigator.clipboard) return;
           navigator.clipboard.writeText(text).then(function () {
-            var label = btn.querySelector('span');
-            var prev = label ? label.textContent : 'copy';
+            const label = btn.querySelector('span');
+            const prev = label ? label.textContent : 'copy';
             if (label) label.textContent = 'copied';
             btn.classList.add('is-copied');
             window.setTimeout(function () {
