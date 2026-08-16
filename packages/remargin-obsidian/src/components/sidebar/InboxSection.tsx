@@ -8,6 +8,7 @@ import {
   inboxFilterLabel,
   inboxFilterQueryOpts,
 } from "@/components/sidebar/inboxFilter";
+import { identityProbeKey } from "@/components/sidebar/inboxIdentityProbe";
 import { deriveLeafState } from "@/components/sidebar/inboxLeafState";
 import { KindFilterBar } from "@/components/sidebar/KindFilterBar";
 import { MarkdownContent } from "@/components/sidebar/MarkdownContent";
@@ -76,7 +77,7 @@ export function InboxSection({
   const [error, setError] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState("");
   const [kindFilter, setKindFilter] = useState<string[]>([]);
-  // Resolve the current identity once per mount. Used by the inbox leaf
+  // Resolved identity of the caller. Used by the inbox leaf
   // to decide whether a row is "directed at me" and to detect "acked by
   // me" without a second round-trip. Null while the probe is in flight —
   // leaves render as neutral in that window (see `deriveLeafState`).
@@ -148,11 +149,19 @@ export function InboxSection({
     refresh();
   }, [refresh]);
 
-  // Resolve identity once per mount. No retry loop: if the CLI errors,
-  // we keep `me` as `null` and leaves render as neutral — an acceptable
-  // fallback that does not block the inbox from loading.
+  const probeKey = identityProbeKey(me, refreshKey);
+
+  // Resolve identity once per mount on the healthy path. No retry loop:
+  // if the CLI errors we keep `me` as `null` and leaves render as neutral
+  // — an acceptable fallback that does not block the inbox from loading.
+  // Recovery is user-triggered via the header's Refresh button (which
+  // moves `probeKey`), never a timer.
   useEffect(() => {
+    if (probeKey === null) return;
     let cancelled = false;
+    // A re-probe re-enters the loading state so the identity-unavailable
+    // notice does not flash while the new call is in flight.
+    setIdentityResolved(false);
     backend
       .identity()
       .then((info) => {
@@ -167,7 +176,7 @@ export function InboxSection({
     return () => {
       cancelled = true;
     };
-  }, [backend]);
+  }, [backend, probeKey]);
 
   const filterLabel = useMemo(() => inboxFilterLabel(filter), [filter]);
   const needsIdentity = inboxFilterQueryOpts(filter, me) === null;
@@ -283,7 +292,7 @@ export function InboxSection({
             <div className="font-semibold mb-1">Identity unavailable</div>
             <div>
               "{filterLabel}" needs your remargin identity, which could not be resolved. Check the
-              plugin's identity settings, then reopen the sidebar.
+              plugin's identity settings, then click Refresh.
             </div>
           </div>
         ) : visibleItems.length === 0 ? (
