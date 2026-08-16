@@ -48,6 +48,10 @@ export interface SandboxListEntry {
 export interface QueryOpts {
   pending?: boolean;
   pendingFor?: string;
+  /** `--pending-for-me`: sugar for `pendingFor` with the CLI-resolved caller. */
+  pendingForMe?: boolean;
+  /** `--pending-broadcast`: `to:`-less comments the caller has not acked. */
+  pendingBroadcast?: boolean;
   author?: string;
   since?: string;
   expanded?: boolean;

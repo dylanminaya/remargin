@@ -3,6 +3,14 @@ import type { UpdateCheckState } from "./lib/githubReleases";
 /** "flat" renders a single-level list; "tree" groups files by directory. */
 export type ViewMode = "flat" | "tree";
 
+/**
+ * Inbox filter mode. Each value maps to one server-side `remargin query`
+ * narrowing (see `inboxFilterQueryOpts`): comments waiting on me, my own
+ * still-pending comments, unacked broadcasts, the broad pending
+ * predicate, and everything.
+ */
+export type InboxFilter = "for-me" | "from-me" | "unassigned" | "pending" | "all";
+
 export interface RemarginSettings {
   remarginPath: string;
   claudePath: string;
@@ -15,6 +23,8 @@ export interface RemarginSettings {
   /** Per-section view mode, persisted across sessions (UI task 26). */
   sandboxView: ViewMode;
   inboxView: ViewMode;
+  /** Last inbox filter mode picked in the sidebar dropdown. */
+  inboxFilter: InboxFilter;
   /**
    * User toggle for the GitHub-releases update probe. When `false` the
    * plugin performs zero network calls and skips the startup Notice
@@ -70,6 +80,7 @@ export const DEFAULT_SETTINGS: RemarginSettings = {
   sidebarSide: "left",
   sandboxView: "tree",
   inboxView: "tree",
+  inboxFilter: "for-me",
   checkForUpdates: true,
   editorWidgets: false,
   markdownScale: MARKDOWN_SCALE_DEFAULT,

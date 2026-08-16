@@ -17,7 +17,7 @@ import { ViewToggle } from "@/components/sidebar/ViewToggle";
 import { openFileAtLine } from "@/lib/openFile";
 import { runSubmitAll } from "@/lib/submitAllPipeline";
 import type RemarginPlugin from "@/main";
-import type { ViewMode } from "@/types";
+import type { InboxFilter, ViewMode } from "@/types";
 
 interface RemarginSidebarProps {
   plugin: RemarginPlugin;
@@ -50,6 +50,7 @@ export function RemarginSidebar({ plugin }: RemarginSidebarProps) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [sandboxView, setSandboxViewState] = useState<ViewMode>(plugin.settings.sandboxView);
   const [inboxView, setInboxViewState] = useState<ViewMode>(plugin.settings.inboxView);
+  const [inboxFilter, setInboxFilterState] = useState<InboxFilter>(plugin.settings.inboxFilter);
   const [availableFolders, setAvailableFolders] = useState<string[]>([]);
 
   const bumpRefresh = useCallback(() => {
@@ -88,6 +89,14 @@ export function RemarginSidebar({ plugin }: RemarginSidebarProps) {
     (next: ViewMode) => {
       setInboxViewState(next);
       void plugin.saveSettings({ ...plugin.settings, inboxView: next });
+    },
+    [plugin]
+  );
+
+  const handleInboxFilter = useCallback(
+    (next: InboxFilter) => {
+      setInboxFilterState(next);
+      void plugin.saveSettings({ ...plugin.settings, inboxFilter: next });
     },
     [plugin]
   );
@@ -343,6 +352,8 @@ export function RemarginSidebar({ plugin }: RemarginSidebarProps) {
           onOpenAtLine={handleOpenAtLine}
           refreshKey={refreshKey}
           viewMode={inboxView}
+          filter={inboxFilter}
+          onFilterChange={handleInboxFilter}
         />
       }
       threadInlineEditor={composeEditor}

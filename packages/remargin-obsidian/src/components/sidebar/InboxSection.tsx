@@ -2,6 +2,12 @@ import { toRegex } from "diacritic-regex";
 import { ChevronDown, Clock, FileText, Search, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { InboxTree } from "@/components/sidebar/InboxTree";
+import {
+  INBOX_FILTER_OPTIONS,
+  inboxEmptyMessage,
+  inboxFilterLabel,
+  inboxFilterQueryOpts,
+} from "@/components/sidebar/inboxFilter";
 import { deriveLeafState } from "@/components/sidebar/inboxLeafState";
 import { KindFilterBar } from "@/components/sidebar/KindFilterBar";
 import { MarkdownContent } from "@/components/sidebar/MarkdownContent";
@@ -19,7 +25,7 @@ import { useBackend } from "@/hooks/useBackend";
 import { useParticipants } from "@/hooks/useParticipants";
 import { authorLabel } from "@/lib/authorLabel";
 import { collectKinds, matchesKindFilter, pruneKindFilter } from "@/lib/kindFilter";
-import type { ViewMode } from "@/types";
+import type { InboxFilter, ViewMode } from "@/types";
 
 /**
  * Build the diacritic- and case-insensitive pattern shipped to
@@ -32,21 +38,6 @@ import type { ViewMode } from "@/types";
  */
 const buildSearchPattern = toRegex({ flags: "i" });
 
-type InboxFilter = "pending" | "all";
-
-interface InboxFilterOption {
-  value: InboxFilter;
-  label: string;
-}
-
-// Extensible list of filter options. Add entries here (e.g. "to-you",
-// "mentions", "acked") and extend the `InboxFilter` union to light up
-// additional dropdown choices without touching the trigger markup.
-const INBOX_FILTER_OPTIONS: readonly InboxFilterOption[] = [
-  { value: "pending", label: "Pending" },
-  { value: "all", label: "All" },
-];
-
 interface InboxItem {
   file: string;
   comment: ExpandedComment;
@@ -57,6 +48,9 @@ interface InboxSectionProps {
   refreshKey?: number;
   /** View mode owned by RemarginSidebar (persisted in plugin settings). */
   viewMode?: ViewMode;
+  /** Filter mode owned by RemarginSidebar (persisted in plugin settings). */
+  filter?: InboxFilter;
+  onFilterChange?: (next: InboxFilter) => void;
 }
 
 function errorMessage(err: unknown): string {
@@ -73,9 +67,10 @@ export function InboxSection({
   onOpenAtLine,
   refreshKey,
   viewMode = "tree",
+  filter = "for-me",
+  onFilterChange,
 }: InboxSectionProps = {}) {
   const backend = useBackend();
-  const [filter, setFilter] = useState<InboxFilter>("pending");
   const [items, setItems] = useState<InboxItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,6 +81,11 @@ export function InboxSection({
   // me" without a second round-trip. Null while the probe is in flight —
   // leaves render as neutral in that window (see `deriveLeafState`).
   const [me, setMe] = useState<string | null>(null);
+  // Separate from `me` because `null` alone cannot tell "probe still in
+  // flight" from "probe finished without an identity" — the identity-
+  // dependent modes need that distinction to choose between the loading
+  // state and the identity-unavailable notice.
+  const [identityResolved, setIdentityResolved] = useState(false);
   // The submitted query only advances on explicit user action (Enter key or
   // search-button click). Typing alone does nothing — the old debounce
   // version felt jittery because every keystroke eventually spawned a CLI
@@ -105,15 +105,22 @@ export function InboxSection({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey is a monotonic counter prop; including it recreates the callback when sibling sections mutate, triggering a re-fetch.
   const refresh = useCallback(async () => {
+    // `from-me` needs a resolved identity to name its `--author`. Skip the
+    // fetch entirely rather than querying the whole vault; the render path
+    // shows the loading state or the identity-unavailable notice.
+    const modeOpts = inboxFilterQueryOpts(filter, me);
+    if (!modeOpts) {
+      setItems([]);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
-      // Single refresh path: text filtering composes with Pending/All via
+      // Single refresh path: text filtering composes with every mode via
       // the CLI's own `--content-regex` + `--ignore-case` options so we
       // make exactly one `query` call regardless of search state.
-      const opts: Parameters<typeof backend.query>[1] = {
-        pending: filter === "pending",
-        expanded: true,
-      };
+      const opts: Parameters<typeof backend.query>[1] = { ...modeOpts };
       if (isSearching) {
         opts.contentRegex = buildSearchPattern(submittedSearch).source;
         opts.ignoreCase = true;
@@ -135,7 +142,7 @@ export function InboxSection({
     } finally {
       setLoading(false);
     }
-  }, [backend, filter, refreshKey, isSearching, submittedSearch]);
+  }, [backend, filter, me, refreshKey, isSearching, submittedSearch]);
 
   useEffect(() => {
     refresh();
@@ -149,20 +156,21 @@ export function InboxSection({
     backend
       .identity()
       .then((info) => {
-        if (!cancelled) setMe(info.identity ?? null);
+        if (cancelled) return;
+        setMe(info.identity ?? null);
+        setIdentityResolved(true);
       })
       .catch((err: unknown) => {
         console.error("InboxSection.identity failed:", err);
+        if (!cancelled) setIdentityResolved(true);
       });
     return () => {
       cancelled = true;
     };
   }, [backend]);
 
-  const filterLabel = useMemo(
-    () => INBOX_FILTER_OPTIONS.find((o) => o.value === filter)?.label ?? filter,
-    [filter]
-  );
+  const filterLabel = useMemo(() => inboxFilterLabel(filter), [filter]);
+  const needsIdentity = inboxFilterQueryOpts(filter, me) === null;
 
   const availableKinds = useMemo(() => collectKinds(items.map((i) => i.comment)), [items]);
 
@@ -182,7 +190,10 @@ export function InboxSection({
     return items.filter((i) => matchesKindFilter(i.comment.remargin_kind, kindFilter));
   }, [items, kindFilter]);
 
-  if (loading) {
+  // Hold the loading state while an identity-dependent mode waits on the
+  // probe, so the notice below only ever means "the probe finished and
+  // produced nothing" rather than "not yet".
+  if (loading || (needsIdentity && !identityResolved)) {
     return <div className="px-4 py-3 text-xs text-text-faint">Loading...</div>;
   }
 
@@ -244,7 +255,7 @@ export function InboxSection({
               {INBOX_FILTER_OPTIONS.map((option) => (
                 <DropdownMenuItem
                   key={option.value}
-                  onClick={() => setFilter(option.value)}
+                  onClick={() => onFilterChange?.(option.value)}
                   className="text-xs"
                 >
                   {option.label}
@@ -267,15 +278,21 @@ export function InboxSection({
             <div className="font-semibold mb-1">Failed to load inbox</div>
             <div className="font-mono text-[10px]">{error}</div>
           </div>
+        ) : needsIdentity ? (
+          <div className="px-4 py-3 text-xs text-text-faint">
+            <div className="font-semibold mb-1">Identity unavailable</div>
+            <div>
+              "{filterLabel}" needs your remargin identity, which could not be resolved. Check the
+              plugin's identity settings, then reopen the sidebar.
+            </div>
+          </div>
         ) : visibleItems.length === 0 ? (
           <div className="px-4 py-3 text-xs text-text-faint">
             {isSearching
               ? "No comments match your search."
               : kindFilter.length > 0
                 ? "No comments match the selected kinds."
-                : filter === "pending"
-                  ? "No pending comments."
-                  : "No comments found."}
+                : inboxEmptyMessage(filter)}
           </div>
         ) : viewMode === "tree" ? (
           <InboxTree items={visibleItems} me={me} onOpenAtLine={onOpenAtLine} />
