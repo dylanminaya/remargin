@@ -374,7 +374,8 @@ fn populate_non_author_fields(mapping: &mut Mapping, doc_body: &str) {
 }
 
 /// Recompute `remargin_*` fields from the current comment state.
-/// Always overwrites these fields (they are tool-managed).
+/// Always overwrites these fields (they are tool-managed); with nothing
+/// pending, `remargin_pending` and `remargin_pending_for` are dropped.
 pub fn update_remargin_fields(mapping: &mut Mapping, comments: &[&Comment]) {
     let pending_count = comments.iter().filter(|cm| cm.is_pending()).count();
 
@@ -408,16 +409,24 @@ pub fn update_remargin_fields(mapping: &mut Mapping, comments: &[&Comment]) {
     // Most recent timestamp across all comments, acks, and reactions.
     let last_activity = find_last_activity(comments);
 
-    // Write the fields.
+    // Write the fields. With nothing pending both are removed rather than
+    // stamped as `0` / `[]`, so the steady state stays out of the reader's
+    // Properties panel; removal (not skip) also sheds a stale non-zero value
+    // left by an earlier write.
     let pending_key = Value::String(String::from("remargin_pending"));
-    mapping.insert(
-        pending_key,
-        Value::Number(serde_yaml::Number::from(pending_count as u64)),
-    );
-
     let pending_for_key = Value::String(String::from("remargin_pending_for"));
-    let pending_for_values: Vec<Value> = pending_for.into_iter().map(Value::String).collect();
-    mapping.insert(pending_for_key, Value::Sequence(pending_for_values));
+    if pending_count == 0 {
+        mapping.remove(&pending_key);
+        mapping.remove(&pending_for_key);
+    } else {
+        mapping.insert(
+            pending_key,
+            Value::Number(serde_yaml::Number::from(pending_count as u64)),
+        );
+
+        let pending_for_values: Vec<Value> = pending_for.into_iter().map(Value::String).collect();
+        mapping.insert(pending_for_key, Value::Sequence(pending_for_values));
+    }
 
     let last_activity_key = Value::String(String::from("remargin_last_activity"));
     match last_activity {

@@ -95,7 +95,8 @@ fn no_frontmatter_adds_frontmatter() {
     assert!(markdown.contains("title: My Doc"));
     assert!(markdown.contains("author: eduardo"));
     assert!(markdown.contains("created:"));
-    assert!(markdown.contains("remargin_pending: 0"));
+    assert!(markdown.contains("remargin_last_activity:"));
+    assert!(!markdown.contains("remargin_pending"));
 }
 
 #[test]
@@ -110,8 +111,9 @@ fn existing_frontmatter_preserved() {
     // User fields preserved (not overwritten).
     assert!(markdown.contains("Custom Title"));
     assert!(markdown.contains("alice"));
-    // Remargin fields added.
-    assert!(markdown.contains("remargin_pending: 0"));
+    // Remargin fields added; with nothing pending only last_activity ships.
+    assert!(markdown.contains("remargin_last_activity:"));
+    assert!(!markdown.contains("remargin_pending"));
 }
 
 #[test]
@@ -256,9 +258,10 @@ fn pending_for_unaddressed_acked_does_not_surface_sentinel() {
     let mut mapping = Mapping::new();
     update_remargin_fields(&mut mapping, &comments);
 
-    let pending_for = get_value(&mapping, "remargin_pending_for").unwrap();
-    let seq = pending_for.as_sequence().unwrap();
-    assert!(seq.is_empty(), "acked unaddressed must not surface");
+    assert!(
+        get_value(&mapping, "remargin_pending_for").is_none(),
+        "acked unaddressed must not surface"
+    );
 }
 
 #[test]
@@ -431,16 +434,47 @@ fn last_activity() {
 }
 
 #[test]
-fn no_comments_zero_pending() {
+fn no_comments_omits_pending_fields() {
     let comments: Vec<&Comment> = Vec::new();
     let mut mapping = Mapping::new();
     update_remargin_fields(&mut mapping, &comments);
 
-    let pending = get_value(&mapping, "remargin_pending").unwrap();
-    assert_eq!(pending.as_u64().unwrap(), 0);
+    assert!(get_value(&mapping, "remargin_pending").is_none());
+    assert!(get_value(&mapping, "remargin_pending_for").is_none());
 
     let last = get_value(&mapping, "remargin_last_activity").unwrap();
     assert!(last.is_null());
+}
+
+#[test]
+fn zero_pending_sheds_stale_stored_values() {
+    // A doc whose previous write stamped a non-zero count must lose both
+    // fields once the last pending comment is acked — remove, not skip.
+    let mut mapping = Mapping::new();
+    mapping.insert(
+        Value::String(String::from("remargin_pending")),
+        Value::Number(serde_yaml::Number::from(2_u64)),
+    );
+    mapping.insert(
+        Value::String(String::from("remargin_pending_for")),
+        Value::Sequence(vec![Value::String(String::from("alice"))]),
+    );
+
+    let cm = make_comment(
+        "a",
+        "2026-04-06T12:00:00-04:00",
+        vec![String::from("alice")],
+        vec![Acknowledgment {
+            author: String::from("alice"),
+            ts: DateTime::parse_from_rfc3339("2026-04-06T13:00:00-04:00").unwrap(),
+        }],
+    );
+    let comments: Vec<&Comment> = vec![&cm];
+    update_remargin_fields(&mut mapping, &comments);
+
+    assert!(get_value(&mapping, "remargin_pending").is_none());
+    assert!(get_value(&mapping, "remargin_pending_for").is_none());
+    assert!(get_value(&mapping, "remargin_last_activity").is_some());
 }
 
 #[test]
@@ -679,7 +713,8 @@ fn authored_preserves_non_author_fields() {
     ensure_frontmatter_authored(&mut doc, &config, false, Some("alice")).unwrap();
     let markdown = doc.to_markdown().unwrap();
     assert!(markdown.contains("title: Custom"));
-    assert!(markdown.contains("remargin_pending: 0"));
+    assert!(markdown.contains("remargin_last_activity:"));
+    assert!(!markdown.contains("remargin_pending"));
 }
 
 /// `read_author` returns the string value when present and `None` otherwise.

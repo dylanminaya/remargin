@@ -2752,8 +2752,6 @@ title: Test
 description: ''
 author: eduardo
 created: 2026-04-18T00:00:00+00:00
-remargin_pending: 0
-remargin_pending_for: []
 remargin_last_activity: null
 ---
 
@@ -2773,19 +2771,19 @@ more content here
 
     let config = open_config();
 
-    // Count lines: the frontmatter occupies lines 1..=9, blank line 10,
-    // `# Header` line 11, blank line 12, `line 10` at line 13.
-    let line_thirteen_original = original.lines().nth(12).unwrap();
-    assert_eq!(line_thirteen_original, "line 10");
+    // Count lines: the frontmatter occupies lines 1..=7, blank line 8,
+    // `# Header` line 9, blank line 10, `line 10` at line 11.
+    let line_eleven_original = original.lines().nth(10).unwrap();
+    assert_eq!(line_eleven_original, "line 10");
 
-    // Replace line 13 only.
+    // Replace line 11 only.
     document::write(
         &system,
         Path::new("/project"),
         Path::new("doc.md"),
         "LINE 10 NEW",
         &config,
-        WriteOptions::new().lines(Some((13, 13))),
+        WriteOptions::new().lines(Some((11, 11))),
     )
     .unwrap();
 

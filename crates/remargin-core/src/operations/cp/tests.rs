@@ -185,9 +185,10 @@ fn copy_resets_frontmatter_pending_and_sandbox() {
     cp(&system, base(), &open_config(), &args).unwrap();
 
     let dst_content = system.read_to_string(&base().join("dst.md")).unwrap();
-    // Copy must have 0 pending and no sandbox.
+    // Copy drops the comments, so nothing is pending and both pending
+    // fields are absent; no sandbox either.
     assert!(
-        dst_content.contains("remargin_pending: 0") || !dst_content.contains("remargin_pending: 2"),
+        !dst_content.contains("remargin_pending"),
         "copy should not inherit pending count: {dst_content}"
     );
     assert!(

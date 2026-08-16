@@ -3521,8 +3521,6 @@ title: Test
 description: ''
 author: eduardo
 created: 2026-04-18T00:00:00+00:00
-remargin_pending: 0
-remargin_pending_for: []
 remargin_last_activity: null
 ---
 
@@ -3535,7 +3533,7 @@ body C
         .unwrap();
     let config = test_config();
 
-    // Lines 11/12/13 are `body A`, `body B`, `body C` — replace line 12.
+    // Lines 9/10/11 are `body A`, `body B`, `body C` — replace line 10.
     let response = call(
         &system,
         base,
@@ -3549,8 +3547,8 @@ body C
                 "arguments": {
                     "path": "doc.md",
                     "content": "BODY B NEW",
-                    "start_line": 12_i32,
-                    "end_line": 12_i32
+                    "start_line": 10_i32,
+                    "end_line": 10_i32
                 }
             }
         }),
