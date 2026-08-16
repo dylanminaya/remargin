@@ -24,7 +24,7 @@ import { buildQueryArgs } from "./buildQueryArgs";
 import { buildWriteInvocation } from "./buildWriteInvocation";
 import { parsePluginsListOutput } from "./detectPlugin";
 import { parsePayloadArray } from "./envelopeParsing";
-import { IDENTITY_ACCEPTING_SUBCOMMANDS } from "./identityAcceptingSubcommands";
+import { acceptsIdentity } from "./identityFreeSubcommands";
 import { performUpdateCheck } from "./performUpdateCheck";
 import type {
   BatchCommentOp,
@@ -42,8 +42,8 @@ import type {
   WriteOpts,
 } from "./types";
 
-// `IDENTITY_ACCEPTING_SUBCOMMANDS` lives in its own file
-// (`identityAcceptingSubcommands.ts`) so tests can import it without
+// The identity-forwarding gate lives in its own file
+// (`identityFreeSubcommands.ts`) so tests can import it without
 // pulling in this module, whose TypeScript parameter-property
 // constructor the test runner's strip-only loader cannot parse.
 
@@ -238,10 +238,9 @@ export class RemarginBackend {
   }
 
   async version(): Promise<string> {
-    const raw = await this.exec(["--version"], {
-      useJson: false,
-      skipIdentity: true,
-    });
+    // Bare-flag probe: `args[0]` starts with "-", so the exec gate
+    // already withholds identity flags.
+    const raw = await this.exec(["--version"], { useJson: false });
     return raw.trim();
   }
 
@@ -265,9 +264,10 @@ export class RemarginBackend {
   async installPluginToVault(): Promise<{ ok: boolean; stderr: string }> {
     const cwd = expandPath(this.settings.workingDirectory) || this.vaultPath;
     try {
+      // `obsidian` is in IDENTITY_FREE_SUBCOMMANDS, so the exec gate
+      // already withholds identity flags.
       await this.exec(["obsidian", "install", "--vault-path", cwd], {
         useJson: false,
-        skipIdentity: true,
         timeout: 60000,
       });
       return { ok: true, stderr: "" };
@@ -465,8 +465,7 @@ export class RemarginBackend {
     const skipIdentity = opts?.skipIdentity ?? false;
     const stdinInput = opts?.stdin;
     const subcommand = args[0];
-    const identityAccepted =
-      subcommand !== undefined && IDENTITY_ACCEPTING_SUBCOMMANDS.has(subcommand);
+    const identityAccepted = acceptsIdentity(subcommand);
     const fullArgs = assembleExecArgs({
       args,
       identityArgs: this.buildIdentityArgs(),

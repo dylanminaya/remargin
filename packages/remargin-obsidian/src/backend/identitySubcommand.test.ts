@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { assembleExecArgs } from "./assembleExecArgs.ts";
-import { IDENTITY_ACCEPTING_SUBCOMMANDS } from "./identityAcceptingSubcommands.ts";
+import { acceptsIdentity } from "./identityFreeSubcommands.ts";
 
 /**
  * Pins `remargin identity` as identity-accepting so the plugin's
@@ -9,10 +9,10 @@ import { IDENTITY_ACCEPTING_SUBCOMMANDS } from "./identityAcceptingSubcommands.t
  * uses. Drift here flips the ack UI branch in the threaded view.
  */
 describe("identity subcommand is identity-accepting", () => {
-  it("IDENTITY_ACCEPTING_SUBCOMMANDS contains 'identity'", () => {
+  it("the exec gate forwards identity for 'identity'", () => {
     assert.ok(
-      IDENTITY_ACCEPTING_SUBCOMMANDS.has("identity"),
-      "identity must be in the set so assembleExecArgs forwards --config"
+      acceptsIdentity("identity"),
+      "identity must not be identity-free so assembleExecArgs forwards --config"
     );
   });
 

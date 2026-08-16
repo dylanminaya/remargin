@@ -9,7 +9,7 @@ import {
  * Standalone update-check orchestrator, factored out of `RemarginBackend`
  * so tests can import it without pulling in the class (whose
  * parameter-property constructor the test-runner's strip-only TypeScript
- * loader cannot parse — see `identityAcceptingSubcommands.ts` for the
+ * loader cannot parse — see `identityFreeSubcommands.ts` for the
  * same workaround pattern).
  *
  * Behavior mirrors `RemarginBackend.checkForUpdates`:

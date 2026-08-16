@@ -27,11 +27,12 @@ impl Cli {
 
 /// Per-subcommand identity group.
 ///
-/// Flattened only into subcommands that resolve an author identity
-/// (comment, edit, ack, react, sign, write, delete, batch, purge,
-/// plan, verify, sandbox, mcp). Read-only / utility
-/// subcommands do not flatten this group so clap rejects any attempt
-/// to pass `--config` / `--identity` / `--type` / `--key` to them.
+/// Flattened into every subcommand that acts on behalf of a caller,
+/// including reads (get, ls, comments, search, query) so callers can
+/// forward identity uniformly. Identity-free machine/tree reads
+/// (resolve-mode, registry, obsidian) and utility subcommands do not
+/// flatten this group, so clap rejects any attempt to pass
+/// `--config` / `--identity` / `--type` / `--key` to them.
 #[derive(clap::Args, Default)]
 pub struct IdentityArgs {
     /// Path to the config file. Declares a complete identity on its
@@ -285,6 +286,8 @@ pub enum Commands {
         #[arg(long)]
         pretty: bool,
         #[command(flatten)]
+        identity_args: IdentityArgs,
+        #[command(flatten)]
         output_args: OutputArgs,
     },
     /// Copy a single tracked file without touching the source.
@@ -404,6 +407,8 @@ pub enum Commands {
         #[arg(long)]
         start: Option<usize>,
         #[command(flatten)]
+        identity_args: IdentityArgs,
+        #[command(flatten)]
         output_args: OutputArgs,
         #[command(flatten)]
         unrestricted_args: UnrestrictedArgs,
@@ -496,6 +501,8 @@ pub enum Commands {
         /// Directory path to list.
         #[arg(default_value = ".")]
         path: String,
+        #[command(flatten)]
+        identity_args: IdentityArgs,
         #[command(flatten)]
         output_args: OutputArgs,
         #[command(flatten)]
@@ -807,6 +814,8 @@ pub enum Commands {
         /// Number of matches to skip before the returned page.
         #[arg(long, default_value = "0")]
         offset: usize,
+        #[command(flatten)]
+        identity_args: IdentityArgs,
         #[command(flatten)]
         output_args: OutputArgs,
     },

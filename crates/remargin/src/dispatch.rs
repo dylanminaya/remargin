@@ -333,9 +333,9 @@ const fn subcommand_is_config_free(cmd: &Commands) -> bool {
 
 /// Fetch the [`IdentityArgs`] flatten for subcommands that declare one.
 ///
-/// Subcommands that do not resolve identity (lint, query, search, ls,
-/// get, metadata, registry, comments, version, keygen, resolve-mode,
-/// skill, obsidian) return `None`; callers use the
+/// Subcommands that do not resolve identity (lint, metadata, registry,
+/// get-image, version, keygen, resolve-mode, doctor, permissions,
+/// claude, goose, obsidian, session) return `None`; callers use the
 /// [`IdentityArgs::default`] to build an empty [`IdentityFlags`].
 const fn subcommand_identity(cmd: &Commands) -> Option<&IdentityArgs> {
     match cmd {
@@ -343,10 +343,13 @@ const fn subcommand_identity(cmd: &Commands) -> Option<&IdentityArgs> {
         | Commands::Activity { identity_args, .. }
         | Commands::Batch { identity_args, .. }
         | Commands::Comment { identity_args, .. }
+        | Commands::Comments { identity_args, .. }
         | Commands::Cp { identity_args, .. }
         | Commands::Delete { identity_args, .. }
         | Commands::Edit { identity_args, .. }
+        | Commands::Get { identity_args, .. }
         | Commands::Identity { identity_args, .. }
+        | Commands::Ls { identity_args, .. }
         | Commands::Mcp { identity_args, .. }
         | Commands::Mv { identity_args, .. }
         | Commands::Plan { identity_args, .. }
@@ -357,23 +360,20 @@ const fn subcommand_identity(cmd: &Commands) -> Option<&IdentityArgs> {
         | Commands::Replace { identity_args, .. }
         | Commands::Rm { identity_args, .. }
         | Commands::Sandbox { identity_args, .. }
+        | Commands::Search { identity_args, .. }
         | Commands::Sign { identity_args, .. }
         | Commands::Verify { identity_args, .. }
         | Commands::Write { identity_args, .. } => Some(identity_args),
         Commands::Claude { .. }
-        | Commands::Comments { .. }
         | Commands::Doctor { .. }
-        | Commands::Get { .. }
         | Commands::Goose { .. }
         | Commands::Keygen { .. }
         | Commands::Lint { .. }
-        | Commands::Ls { .. }
         | Commands::Metadata { .. }
         | Commands::Permissions { .. }
         | Commands::Registry { .. }
         | Commands::ResolveMode { .. }
         | Commands::GetImage { .. }
-        | Commands::Search { .. }
         | Commands::Version => None,
         #[cfg(feature = "obsidian")]
         Commands::Obsidian { .. } => None,
@@ -1262,6 +1262,7 @@ fn handle_comments(
         pretty,
         remargin_kind,
         output_args,
+        ..
     } = command
     else {
         bail!("internal: handle_comments called with wrong subcommand");
@@ -1683,6 +1684,7 @@ fn handle_search(
         limit,
         offset,
         output_args,
+        ..
     } = command
     else {
         bail!("internal: handle_search called with wrong subcommand");

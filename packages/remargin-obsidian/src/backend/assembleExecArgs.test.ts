@@ -41,15 +41,15 @@ describe("assembleExecArgs", () => {
     ]);
   });
 
-  it("omits identity flags entirely for read-only subcommands", () => {
+  it("omits identity flags entirely for identity-free subcommands", () => {
     const out = assembleExecArgs({
-      args: ["ls", "notes"],
+      args: ["registry", "show"],
       identityArgs: ["--config", "/tmp/.remargin.yaml"],
       useJson: true,
       identityAccepted: false,
       skipIdentity: false,
     });
-    assert.deepStrictEqual(out, ["ls", "--json", "notes"]);
+    assert.deepStrictEqual(out, ["registry", "--json", "show"]);
   });
 
   it("omits identity flags when skipIdentity is set (e.g. --version)", () => {
