@@ -1,7 +1,8 @@
 import { toRegex } from "diacritic-regex";
 import { ChevronDown, Clock, FileText, Search, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { InboxTree } from "@/components/sidebar/InboxTree";
+import { inboxFetchToken } from "@/components/sidebar/inboxFetchToken";
 import {
   INBOX_FILTER_OPTIONS,
   inboxEmptyMessage,
@@ -104,50 +105,63 @@ export function InboxSection({
     setSubmittedSearch("");
   }, []);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey is a monotonic counter prop; including it recreates the callback when sibling sections mutate, triggering a re-fetch.
-  const refresh = useCallback(async () => {
-    // `from-me` needs a resolved identity to name its `--author`. Skip the
-    // fetch entirely rather than querying the whole vault; the render path
-    // shows the loading state or the identity-unavailable notice.
-    const modeOpts = inboxFilterQueryOpts(filter, me);
-    if (!modeOpts) {
-      setItems([]);
-      setError(null);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    try {
-      // Single refresh path: text filtering composes with every mode via
-      // the CLI's own `--content-regex` + `--ignore-case` options so we
-      // make exactly one `query` call regardless of search state.
-      const opts: Parameters<typeof backend.query>[1] = { ...modeOpts };
-      if (isSearching) {
-        opts.contentRegex = buildSearchPattern(submittedSearch).source;
-        opts.ignoreCase = true;
+  // Token of the newest fetch issued. Every run tags itself and re-checks
+  // the tag before touching state, so a slow response that a newer fetch
+  // has already superseded is dropped instead of overwriting it.
+  const newestFetch = useRef<string | null>(null);
+
+  const refresh = useCallback(
+    async (generation: number) => {
+      const token = inboxFetchToken(generation, filter, me, submittedSearch);
+      newestFetch.current = token;
+      // `from-me` needs a resolved identity to name its `--author`. Skip the
+      // fetch entirely rather than querying the whole vault; the render path
+      // shows the loading state or the identity-unavailable notice.
+      const modeOpts = inboxFilterQueryOpts(filter, me);
+      if (!modeOpts) {
+        setItems([]);
+        setError(null);
+        setLoading(false);
+        return;
       }
-      const results = await backend.query(".", opts);
-      const flat: InboxItem[] = [];
-      for (const result of results) {
-        for (const comment of result.comments ?? []) {
-          flat.push({ file: result.path, comment });
+      setLoading(true);
+      try {
+        // Single refresh path: text filtering composes with every mode via
+        // the CLI's own `--content-regex` + `--ignore-case` options so we
+        // make exactly one `query` call regardless of search state.
+        const opts: Parameters<typeof backend.query>[1] = { ...modeOpts };
+        if (isSearching) {
+          opts.contentRegex = buildSearchPattern(submittedSearch).source;
+          opts.ignoreCase = true;
         }
+        const results = await backend.query(".", opts);
+        if (newestFetch.current !== token) return;
+        const flat: InboxItem[] = [];
+        for (const result of results) {
+          for (const comment of result.comments ?? []) {
+            flat.push({ file: result.path, comment });
+          }
+        }
+        flat.sort((a, b) => (b.comment.ts?.getTime() ?? 0) - (a.comment.ts?.getTime() ?? 0));
+        setItems(flat);
+        setError(null);
+      } catch (err) {
+        console.error("InboxSection.refresh failed:", err);
+        if (newestFetch.current !== token) return;
+        setItems([]);
+        setError(errorMessage(err));
+      } finally {
+        // A superseded run leaves the loading state to the fetch that
+        // replaced it, so the list never flashes stale rows in between.
+        if (newestFetch.current === token) setLoading(false);
       }
-      flat.sort((a, b) => (b.comment.ts?.getTime() ?? 0) - (a.comment.ts?.getTime() ?? 0));
-      setItems(flat);
-      setError(null);
-    } catch (err) {
-      console.error("InboxSection.refresh failed:", err);
-      setItems([]);
-      setError(errorMessage(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [backend, filter, me, refreshKey, isSearching, submittedSearch]);
+    },
+    [backend, filter, me, isSearching, submittedSearch]
+  );
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    refresh(refreshKey ?? 0);
+  }, [refresh, refreshKey]);
 
   const probeKey = identityProbeKey(me, refreshKey);
 
