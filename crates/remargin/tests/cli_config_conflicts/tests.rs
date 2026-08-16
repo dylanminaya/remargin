@@ -1,4 +1,7 @@
 use core::str;
+use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
 
 use assert_cmd::Command;
 
@@ -7,20 +10,31 @@ use assert_cmd::Command;
 /// clap's required-arg check so the `--config` vs `--identity/type/key`
 /// conflict surfaces. We don't execute the command; clap exits with
 /// code 2 before anything touches the filesystem.
+///
+/// Kept honest by `subcommands_table_matches_identity_flattening_commands`
+/// below, which parses `cli.rs` and fails the build if this table and
+/// the `Commands` enum's `IdentityArgs`-flattening variants diverge —
+/// no need to eyeball dispatch.rs's `subcommand_identity` by hand.
 const SUBCOMMANDS: &[(&str, &[&str])] = &[
     ("ack", &["foo"]),
+    ("activity", &[]),
     ("batch", &["a.md", "--ops", "[]"]),
     ("comment", &["a.md", "hi"]),
     ("comments", &["a.md"]),
+    ("cp", &["a.md", "b.md"]),
     ("delete", &["a.md", "foo"]),
     ("edit", &["a.md", "foo", "content"]),
     ("get", &["a.md"]),
     ("identity", &[]),
     ("ls", &[]),
     ("mcp", &[]),
+    ("mv", &["a.md", "b.md"]),
     ("plan", &["comment", "a.md", "hi"]),
+    ("prompt", &["resolve", "a.md"]),
     ("purge", &["a.md"]),
+    ("query", &[]),
     ("react", &["a.md", "foo", "thumbsup"]),
+    ("replace", &["foo", "bar"]),
     ("rm", &["a.md"]),
     ("sandbox", &["list"]),
     ("search", &["needle"]),
@@ -93,4 +107,69 @@ fn config_conflicts_with_key_on_every_subcommand() {
         let args = args_for(cmd, tail, &["--config", "/x.yaml", "--key", "id"]);
         assert_conflict_strs(&args, "--key");
     }
+}
+
+/// Kebab-cases a `PascalCase` variant identifier the way clap's
+/// `Subcommand` derive names subcommands by default (`cli.rs` has no
+/// `rename_all` override).
+fn to_kebab_case(ident: &str) -> String {
+    let mut out = String::new();
+    for (i, ch) in ident.char_indices() {
+        if ch.is_uppercase() && i != 0 {
+            out.push('-');
+        }
+        out.extend(ch.to_lowercase());
+    }
+    out
+}
+
+/// Parses `src/cli.rs` and returns the subcommand names of every
+/// `Commands` variant that flattens `identity_args: IdentityArgs`.
+/// This is the same ground truth `dispatch.rs`'s `subcommand_identity`
+/// switches on, read directly from the enum instead of duplicating its
+/// match arms.
+fn identity_flattening_subcommands() -> HashSet<String> {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let path = Path::new(manifest_dir).join("src/cli.rs");
+    let src = fs::read_to_string(&path).unwrap();
+    let file = syn::parse_file(&src).unwrap();
+    let commands_enum = file
+        .items
+        .iter()
+        .find_map(|item| {
+            if let syn::Item::Enum(e) = item {
+                (e.ident == "Commands").then_some(e)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    commands_enum
+        .variants
+        .iter()
+        .filter(|v| {
+            matches!(&v.fields, syn::Fields::Named(named)
+                if named.named.iter().any(|f| f.ident.as_ref().is_some_and(|i| i == "identity_args")))
+        })
+        .map(|v| to_kebab_case(&v.ident.to_string()))
+        .collect()
+}
+
+/// Drift guard: fails the moment `Commands` in `cli.rs` gains or loses
+/// an `IdentityArgs`-flattening variant that `SUBCOMMANDS` above
+/// doesn't track — the failure this whole file exists to prevent (a
+/// subcommand silently missing the `--config` conflict test).
+#[test]
+fn subcommands_table_matches_identity_flattening_commands() {
+    let expected = identity_flattening_subcommands();
+    let actual: HashSet<String> = SUBCOMMANDS
+        .iter()
+        .map(|&(name, _)| name.to_owned())
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "SUBCOMMANDS in cli_config_conflicts/tests.rs has drifted from the \
+         IdentityArgs-flattening variants of Commands in cli.rs; add or remove \
+         rows to match"
+    );
 }

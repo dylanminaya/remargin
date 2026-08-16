@@ -303,11 +303,6 @@ export class RemarginBackend {
   }
 
   /**
-   * Ask the CLI to resolve an identity config by walking up from the vault.
-   * Does not pass any identity flags (so it can run before settings are
-   * populated).
-   */
-  /**
    * Write or patch the `mode:` field in the vault-root `.remargin.yaml`.
    *
    * The vault root is the working directory resolved the same way `exec`

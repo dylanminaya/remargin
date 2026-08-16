@@ -11,8 +11,11 @@
 //! in — regressing any of them would silently drop `--config` for that
 //! subcommand (the exact bug that motivated this test file).
 //!
-//! The subcommand table below is intentionally exhaustive. If you add a
-//! new subcommand with `IdentityArgs`, add it here too.
+//! The subcommand table below must list every subcommand that flattens
+//! `IdentityArgs`. `subcommands_table_matches_identity_flattening_commands`
+//! enforces this by parsing `cli.rs`'s `Commands` enum directly, so a new
+//! `IdentityArgs`-flattening subcommand that isn't added here fails the
+//! build instead of silently escaping this conflict test.
 
 #[cfg(test)]
 #[path = "cli_config_conflicts/tests.rs"]
