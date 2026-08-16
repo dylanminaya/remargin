@@ -16,6 +16,8 @@ export interface InlinePromptEditorSaveArgs {
   name: string;
   /** Final prompt body (may be empty). */
   prompt: string;
+  /** Final runner command. Empty = use the default runner. */
+  runner: string;
 }
 
 export interface InlinePromptEditorProps {
@@ -30,6 +32,11 @@ export interface InlinePromptEditorProps {
   folder: string;
   initialName: string;
   initialBody: string;
+  /**
+   * Stored runner command, prefilled so a plain Save round-trips it
+   * instead of silently clearing it. Empty = default runner.
+   */
+  initialRunner?: string;
   onSave: (args: InlinePromptEditorSaveArgs) => Promise<void>;
   onDelete?: (source: string) => Promise<void>;
   onCancel: () => void;
@@ -61,6 +68,7 @@ export function InlinePromptEditor({
   folder,
   initialName,
   initialBody,
+  initialRunner,
   onSave,
   onDelete,
   onCancel,
@@ -69,6 +77,7 @@ export function InlinePromptEditor({
 }: InlinePromptEditorProps) {
   const isCreate = source === null;
   const [name, setName] = useState(initialName);
+  const [runner, setRunner] = useState(initialRunner ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -97,13 +106,13 @@ export function InlinePromptEditor({
     try {
       const dir = (source === null ? chosenFolder : folder).replace(/\/$/u, "");
       const target = source ?? (dir === "" ? ".remargin.yaml" : `${dir}/.remargin.yaml`);
-      await onSave({ source: target, name, prompt });
+      await onSave({ source: target, name, prompt, runner });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSubmitting(false);
     }
-  }, [submitting, saveDisabledReason, source, folder, chosenFolder, name, onSave, getBody]);
+  }, [submitting, saveDisabledReason, source, folder, chosenFolder, name, runner, onSave, getBody]);
 
   const handleDelete = useCallback(async () => {
     if (deleting || !onDelete || !source) return;
@@ -216,6 +225,17 @@ export function InlinePromptEditor({
         <div
           ref={editorRef}
           className="min-h-[120px] border border-bg-border rounded-sm bg-bg-primary"
+        />
+      </label>
+
+      <label className="flex flex-col gap-1">
+        <span className="text-[10px] uppercase tracking-wide text-text-faint">Runner command</span>
+        <input
+          type="text"
+          value={runner}
+          onChange={(e) => setRunner(e.target.value)}
+          placeholder="(default: claude -p auto mode)"
+          className="w-full p-1.5 text-xs font-mono bg-bg-primary border border-bg-border rounded-sm text-text-normal placeholder:text-text-faint focus:outline-none focus:ring-1 focus:ring-accent"
         />
       </label>
 

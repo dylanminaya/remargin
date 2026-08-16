@@ -1,5 +1,5 @@
-import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname as dirnamePath, join as joinPath } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join as joinPath } from "node:path";
 import { spawn } from "child_process";
 import {
   type Comment,
@@ -380,10 +380,14 @@ export class RemarginBackend {
    * `<folder>/.remargin.yaml` via `remargin prompt set`. The body is
    * piped on stdin so multi-line content round-trips byte-for-byte
    * without flag-escaping. Other YAML fields are preserved verbatim
-   * by the CLI's post-write diff.
+   * by the CLI's post-write diff. Omitting `runner` clears any stored
+   * runner (the CLI replaces the whole block).
    */
-  async promptSet(folder: string, name: string, prompt: string): Promise<void> {
-    await this.exec(["prompt", "set", folder, "--name", name], { stdin: prompt });
+  async promptSet(folder: string, name: string, prompt: string, runner?: string): Promise<void> {
+    const args = ["prompt", "set", folder, "--name", name];
+    const trimmedRunner = runner?.trim();
+    if (trimmedRunner) args.push("--runner", trimmedRunner);
+    await this.exec(args, { stdin: prompt });
   }
 
   /**
@@ -535,9 +539,10 @@ export class RemarginBackend {
    * bare PATH lookup (`remargin`) if the configured path does not exist on
    * disk. This lets users leave the setting blank when remargin is on their
    * PATH, and lets them use a portable `~/.cargo/bin/remargin` style entry
-   * across machines.
+   * across machines. Public so the submit flow can bake the resolved path
+   * into the default runner command.
    */
-  private resolveBinary(): string {
+  resolveBinary(): string {
     const configured = expandPath(this.settings.remarginPath);
     if (!configured) return "remargin";
     // If the user typed a bare command name (no path separator), trust
@@ -550,103 +555,12 @@ export class RemarginBackend {
   }
 
   /**
-   * Spawn `claude -p <prompt>` and wait for completion. Used by the
-   * Submit-all pipeline (task 48): one invocation per prompt group,
-   * sequential, continue-on-failure handled by the caller.
-   *
-   * The prompt body is passed as a single argv element via `spawn`'s
-   * args array, so shell-special characters in the body are inert
-   * (no `sh -c`).
-   */
-  async invokeClaude(prompt: string, files: string[], opts?: InvokeClaudeOpts): Promise<void> {
-    const binary = this.resolveClaudeBinary();
-    const cwd = opts?.cwd ?? (expandPath(this.settings.workingDirectory) || this.vaultPath);
-    const timeout = opts?.timeout ?? 300_000;
-    const fullPrompt = buildClaudePrompt(prompt, files, opts?.useSlashCommand);
-
-    const identity = await this.identity().catch(() => null);
-    const logStream = opts?.logPath
-      ? openLogStream(opts.logPath, {
-          binary,
-          prompt,
-          files,
-          cwd,
-          promptName: opts?.promptName,
-          identity: identity?.identity,
-        })
-      : null;
-
-    // WHY: headless claude denies any tool requiring runtime approval
-    // because there's no interactive prompt. Pre-approving the remargin
-    // MCP namespace lets the launched agent read pending comments,
-    // write replies, etc. without the user having to click through
-    // permission dialogs the plugin can't surface.
-    const args = ["-p", fullPrompt, "--allowedTools", "mcp__remargin__*"];
-
-    return new Promise<void>((resolve, reject) => {
-      // WHY: claude -p waits ~3s on stdin before printing
-      // "no stdin data received". We never pipe to stdin, so close it
-      // immediately via stdio[0]='ignore' (equivalent to < /dev/null).
-      const child = spawn(binary, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
-      const stderrChunks: Buffer[] = [];
-      let settled = false;
-
-      const settle = (fn: () => void): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        fn();
-      };
-
-      child.stderr.on("data", (chunk: Buffer) => {
-        stderrChunks.push(chunk);
-        logStream?.write(chunk);
-      });
-      // Drain stdout so the child doesn't deadlock on a full pipe.
-      child.stdout.on("data", (chunk: Buffer) => {
-        logStream?.write(chunk);
-      });
-
-      const timer = setTimeout(() => {
-        child.kill();
-        settle(() => {
-          logStream?.end(`\n${"`".repeat(4)}\n\n_[remargin] killed: timeout after ${timeout}ms_\n`);
-          reject(new Error(`claude timed out after ${timeout}ms`));
-        });
-      }, timeout);
-
-      child.on("error", (err: NodeJS.ErrnoException) => {
-        settle(() => {
-          const msg =
-            err.code === "ENOENT"
-              ? `claude binary not found at "${binary}". Check plugin settings.`
-              : `failed to spawn claude: ${err.message}`;
-          logStream?.end(`\n${"`".repeat(4)}\n\n_[remargin] spawn error: ${msg}_\n`);
-          reject(new Error(msg));
-        });
-      });
-
-      child.on("close", (code) => {
-        settle(() => {
-          logStream?.end(`\n${"`".repeat(4)}\n\n_[remargin] exit ${code ?? "unknown"}_\n`);
-          if (code !== 0) {
-            const stderr = Buffer.concat(stderrChunks).toString("utf-8");
-            const detail = stderr.trim() || `exit code ${code ?? "unknown"}`;
-            reject(new Error(detail));
-            return;
-          }
-          resolve();
-        });
-      });
-    });
-  }
-
-  /**
    * Resolve the `claude` binary path. Mirrors [`resolveBinary`] but
    * keyed off `settings.claudePath`. Empty / bare-name values fall
-   * back to PATH lookup.
+   * back to PATH lookup. Public for the same default-runner reason as
+   * [`resolveBinary`].
    */
-  private resolveClaudeBinary(): string {
+  resolveClaudeBinary(): string {
     const configured = expandPath(this.settings.claudePath);
     if (!configured) return "claude";
     const looksLikePath = configured.includes("/") || configured.includes("\\");
@@ -654,75 +568,4 @@ export class RemarginBackend {
     if (existsSync(configured)) return configured;
     return "claude";
   }
-}
-
-export function buildClaudePrompt(
-  prompt: string,
-  files: string[],
-  slash?: { command: string; arg?: string }
-): string {
-  if (slash) {
-    return slash.arg ? `/${slash.command} ${slash.arg}` : `/${slash.command}`;
-  }
-  return files.length > 0 ? `${prompt}\n\nFiles:\n${files.join("\n")}` : prompt;
-}
-
-export interface InvokeClaudeOpts {
-  /** Timeout in ms. Default: 300_000 (5 min). Per-group, not total. */
-  timeout?: number;
-  /**
-   * Working directory for the spawn. Default: the plugin's working
-   * directory (or vault root when blank).
-   */
-  cwd?: string;
-  /**
-   * Absolute path of the per-run log file. When set, stdout+stderr are
-   * appended in real time. Parent directories are created if missing.
-   */
-  logPath?: string;
-  /** Resolved system-prompt name; used as the log file's H1. */
-  promptName?: string;
-  /**
-   * Invoke a slash command instead of the inline-prompt argv. When set,
-   * `prompt` and `files` are ignored — the spawned claude receives
-   * `/<command>[ <arg>]` as its `-p` argument.
-   */
-  useSlashCommand?: { command: string; arg?: string };
-}
-
-interface OpenLogStreamArgs {
-  binary: string;
-  prompt: string;
-  files: string[];
-  cwd: string;
-  promptName?: string;
-  identity?: string;
-}
-
-function openLogStream(logPath: string, args: OpenLogStreamArgs) {
-  mkdirSync(dirnamePath(logPath), { recursive: true });
-  const stream = createWriteStream(logPath, { flags: "a" });
-  const ts = new Date().toISOString();
-  const title = args.promptName?.trim() || "Submit run";
-  const fileList = args.files.length ? args.files.map((f) => `- \`${f}\``).join("\n") : "_(none)_";
-  // WHY: 4-backtick fence so a 3-backtick block inside the spawn output
-  // doesn't close it early. The footer (written on stream end) closes
-  // this fence and adds the exit-status line.
-  const fence = "`".repeat(4);
-  const header =
-    "---\n" +
-    `ts: ${ts}\n` +
-    (args.identity ? `identity: ${args.identity}\n` : "") +
-    `cwd: ${args.cwd}\n` +
-    `command: ${args.binary} -p\n` +
-    "---\n\n" +
-    `# ${title}\n\n` +
-    "## Prompt\n\n" +
-    `${args.prompt.trim()}\n\n` +
-    "## Files\n\n" +
-    `${fileList}\n\n` +
-    "## Output\n\n" +
-    `${fence}\n`;
-  stream.write(header);
-  return stream;
 }

@@ -1,11 +1,9 @@
-import { dirname, relative as relativePath } from "node:path";
-import { Notice, TFile } from "obsidian";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join as joinPath } from "node:path";
+import { Notice, type TFile } from "obsidian";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type {
-  StagedGroup,
-  SubmitGroupResult,
-  SubmitProgress,
-} from "@/components/sidebar/buildPromptGroups";
+import type { StagedGroup } from "@/components/sidebar/buildPromptGroups";
 import { InboxSection } from "@/components/sidebar/InboxSection";
 import { InlineCommentEditor } from "@/components/sidebar/InlineCommentEditor";
 import type { InlinePromptEditorSaveArgs } from "@/components/sidebar/InlinePromptEditor";
@@ -14,8 +12,15 @@ import { SandboxSection } from "@/components/sidebar/SandboxSection";
 import { SidebarShell } from "@/components/sidebar/SidebarShell";
 import { ThreadedComments } from "@/components/sidebar/ThreadedComments";
 import { ViewToggle } from "@/components/sidebar/ViewToggle";
+import { expandPath } from "@/lib/expandPath";
 import { openFileAtLine } from "@/lib/openFile";
-import { runSubmitAll } from "@/lib/submitAllPipeline";
+import {
+  buildSubmitShellLine,
+  composeInlinePrompt,
+  defaultRunner,
+  promptFileSlug,
+} from "@/lib/submitCommand";
+import { launchInTerminal, resolveTerminal } from "@/lib/terminalLauncher";
 import type RemarginPlugin from "@/main";
 import type { InboxFilter, ViewMode } from "@/types";
 
@@ -185,81 +190,56 @@ export function RemarginSidebar({ plugin }: RemarginSidebarProps) {
   );
 
   const handleSandboxSubmit = useCallback(
-    async (groups: StagedGroup[], progress?: SubmitProgress): Promise<SubmitGroupResult[]> => {
+    async (groups: StagedGroup[]): Promise<void> => {
+      if (groups.length === 0) return;
+      const prefix = resolveTerminal(plugin.settings.terminalCommand, process.platform);
+      if (!prefix) {
+        new Notice(
+          "No terminal emulator found. Set the Terminal command option in the Remargin settings."
+        );
+        return;
+      }
       plugin.backend.invalidatePluginPresence();
       const presence = await plugin.backend.detectPlugin();
-      const useSlash = presence.kind === "installed_enabled";
-      const results = await runSubmitAll({
-        groups,
-        runGroup: (group) =>
-          useSlash
-            ? plugin.backend.invokeClaude("", [], {
-                logPath: group.logPath,
-                promptName: group.prompt.name,
-                useSlashCommand: {
-                  command: "remargin:process-sandbox-group",
-                  arg: group.prompt.name,
-                },
-              })
-            : plugin.backend.invokeClaude(group.prompt.prompt, group.files, {
-                logPath: group.logPath,
-                promptName: group.prompt.name,
-              }),
-        cleanupGroup: (group) =>
-          useSlash ? Promise.resolve() : plugin.backend.sandboxRemove(group.files),
-        bumpRefresh,
-        progress,
+      const slashAvailable = presence.kind === "installed_enabled";
+
+      const tempDir = mkdtempSync(joinPath(tmpdir(), "remargin-submit-"));
+      const usedSlugs = new Set<string>();
+      const entries = groups.map((group) => {
+        const customRunner = group.prompt.runner?.trim() || "";
+        // The slash skill self-cleans markers; the inline prompt carries
+        // its own cleanup instruction for arbitrary runners.
+        const promptText =
+          !customRunner && slashAvailable
+            ? `/remargin:process-sandbox-group ${group.prompt.name}`
+            : composeInlinePrompt(group.prompt.prompt, group.files);
+        let slug = promptFileSlug(group.prompt.name);
+        for (let n = 2; usedSlugs.has(slug); n += 1) {
+          slug = `${promptFileSlug(group.prompt.name)}-${n}`;
+        }
+        usedSlugs.add(slug);
+        const promptFile = joinPath(tempDir, `${slug}.md`);
+        writeFileSync(promptFile, promptText, "utf-8");
+        const runner =
+          customRunner ||
+          defaultRunner(plugin.backend.resolveClaudeBinary(), plugin.backend.resolveBinary());
+        return { promptFile, runner };
       });
-      // Final rescan so the list reflects every successful clear.
+
+      const vaultPath =
+        (plugin.app.vault.adapter as unknown as { basePath?: string }).basePath ?? "";
+      const cwd = expandPath(plugin.settings.workingDirectory) || vaultPath;
+      launchInTerminal(prefix, buildSubmitShellLine(entries), cwd);
+      new Notice(`Launched terminal for ${groups.length} group(s)`);
       bumpRefresh();
-      return results;
     },
     [plugin, bumpRefresh]
   );
 
-  const handleOpenLog = useCallback(
-    async (absLogPath: string): Promise<void> => {
-      const vaultPath =
-        (plugin.app.vault.adapter as unknown as { basePath?: string }).basePath ?? "";
-      const relPath = vaultPath ? relativePath(vaultPath, absLogPath) : absLogPath;
-      const adapter = plugin.app.vault.adapter;
-      try {
-        const dir = dirname(relPath);
-        // WHY: vault.adapter keeps Obsidian's file index in sync; node's
-        // fs would leave the new file invisible to getAbstractFileByPath
-        // until the file watcher polls, and the fallback through
-        // openLinkText then re-tries createFolder and throws.
-        if (dir && dir !== "." && !(await adapter.exists(dir))) {
-          await adapter.mkdir(dir);
-        }
-        if (!(await adapter.exists(relPath))) {
-          await adapter.write(relPath, "");
-        }
-      } catch (err) {
-        console.error("[remargin] failed to ensure log file exists:", err);
-        new Notice(`Could not prepare submit log: ${err instanceof Error ? err.message : err}`);
-        return;
-      }
-      const tfile = plugin.app.vault.getAbstractFileByPath(relPath);
-      if (!(tfile instanceof TFile)) {
-        console.error("[remargin] submit log not in vault index after write:", relPath);
-        new Notice(`Submit log written but not yet indexed: ${relPath}`);
-        return;
-      }
-      try {
-        await plugin.app.workspace.getLeaf("tab").openFile(tfile);
-      } catch (err) {
-        console.error("[remargin] failed to open submit log:", err);
-        new Notice(`Could not open submit log: ${err instanceof Error ? err.message : err}`);
-      }
-    },
-    [plugin]
-  );
-
   const handleSavePrompt = useCallback(
-    async ({ source, name, prompt }: InlinePromptEditorSaveArgs) => {
+    async ({ source, name, prompt, runner }: InlinePromptEditorSaveArgs) => {
       const folder = dirname(source);
-      await plugin.backend.promptSet(folder, name, prompt);
+      await plugin.backend.promptSet(folder, name, prompt, runner);
       bumpRefresh();
     },
     [plugin, bumpRefresh]
@@ -343,7 +323,6 @@ export function RemarginSidebar({ plugin }: RemarginSidebarProps) {
           vaultRoot={
             (plugin.app.vault.adapter as unknown as { basePath?: string }).basePath ?? undefined
           }
-          onOpenLog={handleOpenLog}
         />
       }
       inboxActions={<ViewToggle value={inboxView} onChange={handleInboxView} />}

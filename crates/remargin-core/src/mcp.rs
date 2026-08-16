@@ -703,7 +703,8 @@ fn desc_prompt_set() -> ToolDesc {
             "properties": {
                 "folder": { "type": "string", "description": "Folder containing the `.remargin.yaml`. Defaults to the MCP root." },
                 "name":   { "type": "string", "description": "Human-readable display label. Required." },
-                "prompt": { "type": "string", "description": "Prompt body text. Required." }
+                "prompt": { "type": "string", "description": "Prompt body text. Required." },
+                "runner": { "type": "string", "description": "Single-line command the composed prompt is piped into. Omitting it clears any existing runner." }
             },
             "required": ["name", "prompt"]
         }),
@@ -2455,8 +2456,9 @@ fn handle_prompt_set(
     let folder = resolve_folder_param(base_dir, params);
     let name = required_str(params, "name")?;
     let prompt = required_str(params, "prompt")?;
+    let runner = optional_str(params, "runner");
     let cfg = config;
-    let outcome = prompt_ops::set(system, &folder, Some(name), prompt, cfg)?;
+    let outcome = prompt_ops::set(system, &folder, Some(name), prompt, runner, cfg)?;
     serde_json::to_value(&outcome).context("serializing prompt_set output")
 }
 

@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use os_shim::System;
 use serde::Serialize;
 
@@ -41,6 +41,9 @@ pub struct ResolvedSystemPrompt {
     pub name: String,
     /// Body to send to the AI.
     pub prompt: String,
+    /// Single-line command the composed prompt is piped into. `None`
+    /// means the caller's default runner.
+    pub runner: Option<String>,
     /// `.remargin.yaml` that declared the prompt. `None` for the
     /// fallback.
     pub source: Option<PathBuf>,
@@ -90,10 +93,14 @@ pub fn resolve_system_prompt(
                     .name
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| folder_name_for(&current));
+                if sp.runner.as_deref().is_some_and(|r| r.contains('\n')) {
+                    bail!("runner must be a single line (in {})", candidate.display());
+                }
                 return Ok(ResolvedSystemPrompt {
                     is_default: false,
                     name,
                     prompt: sp.prompt,
+                    runner: sp.runner,
                     source: Some(candidate),
                 });
             }
@@ -107,6 +114,7 @@ pub fn resolve_system_prompt(
         is_default: true,
         name: "default".to_owned(),
         prompt: DEFAULT_PROMPT_BODY.to_owned(),
+        runner: None,
         source: None,
     })
 }
@@ -131,6 +139,9 @@ pub fn render_resolved_prompt(target: &Path, resolved: &ResolvedSystemPrompt) ->
     let mut out = String::new();
     let _ = writeln!(out, "Resolved prompt for: {}", target.display());
     let _ = writeln!(out, "  Name:    {}", resolved.name);
+    if let Some(runner) = &resolved.runner {
+        let _ = writeln!(out, "  Runner:  {runner}");
+    }
     match &resolved.source {
         Some(path) => {
             let _ = writeln!(out, "  Source:  {}", path.display());

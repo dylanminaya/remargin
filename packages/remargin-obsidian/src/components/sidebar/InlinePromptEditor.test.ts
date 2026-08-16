@@ -111,6 +111,37 @@ describe("InlinePromptEditor — name input wiring", () => {
   });
 });
 
+describe("InlinePromptEditor — runner input wiring", () => {
+  it("renders the Runner command input with the default-runner placeholder", () => {
+    const html = render({});
+    assert.ok(html.includes("Runner command"), `expected runner label, got: ${html}`);
+    assert.ok(
+      html.includes("(default: claude -p auto mode)"),
+      `expected runner placeholder, got: ${html}`
+    );
+  });
+
+  it("prefills the runner input from initialRunner so Save round-trips it", () => {
+    const html = render({
+      source: "notes/foo/.remargin.yaml",
+      initialName: "Foo",
+      initialRunner: "goose run -i -",
+    });
+    assert.ok(
+      /<input[^>]*value="goose run -i -"/.test(html),
+      `expected runner input seeded, got: ${html}`
+    );
+  });
+
+  it("leaves the runner input empty when initialRunner is absent", () => {
+    const html = render({ source: "notes/foo/.remargin.yaml", initialName: "Foo" });
+    assert.ok(
+      !/<input[^>]*value="goose run/.test(html),
+      `expected empty runner input, got: ${html}`
+    );
+  });
+});
+
 describe("InlinePromptEditor — Delete affordance", () => {
   it("renders Delete when editing AND onDelete is provided", () => {
     const html = render({

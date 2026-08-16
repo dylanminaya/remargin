@@ -1510,9 +1510,15 @@ pub fn cmd_prompt_set(
     if params.name.is_empty() {
         bail!("--name is required");
     }
-    let outcome =
-        operations::prompt::set(system, &absolute, Some(params.name), &body, params.config)
-            .with_context(|| format!("setting prompt at {}", absolute.display()))?;
+    let outcome = operations::prompt::set(
+        system,
+        &absolute,
+        Some(params.name),
+        &body,
+        params.runner,
+        params.config,
+    )
+    .with_context(|| format!("setting prompt at {}", absolute.display()))?;
     if params.json_mode {
         let value = serde_json::to_value(&outcome).context("serializing prompt_set output")?;
         return print_output(sinks, true, &value);

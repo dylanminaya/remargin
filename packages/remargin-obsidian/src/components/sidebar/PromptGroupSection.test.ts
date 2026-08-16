@@ -89,8 +89,6 @@ function baseProps(group: PromptGroup): PromptGroupSectionProps {
     selected: new Set<string>(),
     stagedOpen: true,
     unstagedOpen: true,
-    status: undefined,
-    statusError: undefined,
     onToggleStagedOpen: noop,
     onToggleUnstagedOpen: noop,
     onToggleSelected: noop,
@@ -142,63 +140,12 @@ describe("PromptGroupSection — header chrome", () => {
   });
 });
 
-describe("PromptGroupSection — submit status variants", () => {
-  it("renders no status icon when status is undefined", () => {
+describe("PromptGroupSection — no per-group status chrome", () => {
+  it("renders no submit status icons (fire-and-forget submit)", () => {
     const html = render(explicit());
-    assert.ok(!html.includes("lucide-loader-circle"), "no spinner without status");
-    assert.ok(!html.includes('aria-label="Submitted"'), "no success check without status");
-    assert.ok(!html.includes('aria-label="Submit failed"'), "no error triangle without status");
-  });
-
-  it("renders the spinner with aria-label='Submitting' when status='pending'", () => {
-    const html = render(explicit(), { status: "pending" });
-    assert.ok(
-      html.includes('aria-label="Submitting"'),
-      `expected Submitting aria-label, got: ${html}`
-    );
-    // Loader2 from lucide renders as lucide-loader-circle.
-    assert.ok(/lucide-loader/.test(html), `expected loader icon, got: ${html}`);
-    assert.ok(html.includes("animate-spin"), `expected spin animation class, got: ${html}`);
-  });
-
-  it("renders a green check with aria-label='Submitted' when status='ok'", () => {
-    const html = render(explicit(), { status: "ok" });
-    assert.ok(
-      html.includes('aria-label="Submitted"'),
-      `expected Submitted aria-label, got: ${html}`
-    );
-    assert.ok(html.includes("text-green-500"), `expected green tone, got: ${html}`);
-  });
-
-  it("renders a red triangle with aria-label='Submit failed' when status='failed'", () => {
-    const html = render(explicit(), { status: "failed" });
-    assert.ok(
-      html.includes('aria-label="Submit failed"'),
-      `expected Submit failed aria-label, got: ${html}`
-    );
-    assert.ok(html.includes("lucide-triangle-alert"), `expected alert icon, got: ${html}`);
-    assert.ok(html.includes("text-red-400"), `expected red tone, got: ${html}`);
-  });
-
-  it("surfaces statusError via the title attribute on failed status", () => {
-    const html = render(explicit(), {
-      status: "failed",
-      statusError: "claude -p exit=1",
-    });
-    assert.ok(
-      html.includes('title="claude -p exit=1"'),
-      `expected status error tooltip, got: ${html}`
-    );
-  });
-
-  it("does NOT render the error tooltip when statusError is empty", () => {
-    const html = render(explicit(), { status: "failed" });
-    // The wrapping span should still render, but with no title attribute
-    // (or an empty one). Either way: not the failure-message text.
-    assert.ok(
-      !html.includes('title="claude -p exit=1"'),
-      `expected absent error tooltip, got: ${html}`
-    );
+    assert.ok(!html.includes("lucide-loader-circle"), "no spinner");
+    assert.ok(!html.includes('aria-label="Submitted"'), "no success check");
+    assert.ok(!html.includes('aria-label="Submit failed"'), "no error triangle");
   });
 });
 

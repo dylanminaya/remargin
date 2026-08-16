@@ -1428,6 +1428,10 @@ pub enum PromptAction {
         /// stdin for multi-line content.
         #[arg(long)]
         prompt: Option<String>,
+        /// Single-line command the composed prompt is piped into.
+        /// Omitting it clears any existing runner.
+        #[arg(long)]
+        runner: Option<String>,
         #[command(flatten)]
         output_args: OutputArgs,
     },

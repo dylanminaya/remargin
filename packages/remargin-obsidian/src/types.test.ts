@@ -21,6 +21,10 @@ describe("RemarginSettings shape", () => {
   it("DEFAULT_SETTINGS.markdownScale is the default scale", () => {
     assert.equal(DEFAULT_SETTINGS.markdownScale, MARKDOWN_SCALE_DEFAULT);
   });
+
+  it("DEFAULT_SETTINGS.terminalCommand is empty (auto-detect)", () => {
+    assert.equal(DEFAULT_SETTINGS.terminalCommand, "");
+  });
 });
 
 describe("clampMarkdownScale", () => {

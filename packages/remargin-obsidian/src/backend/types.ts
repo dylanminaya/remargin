@@ -144,6 +144,11 @@ export interface ResolvedSystemPrompt {
   /** Body to forward to Claude. */
   prompt: string;
   /**
+   * Single-line command the composed prompt is piped into. `null` (or
+   * absent) means the caller's default runner.
+   */
+  runner?: string | null;
+  /**
    * Absolute path of the `.remargin.yaml` that declared the prompt, or
    * `null` for the Default fallback.
    */
@@ -162,6 +167,8 @@ export interface PromptListEntry {
   name: string | null;
   /** Verbatim prompt body. */
   prompt: string;
+  /** `system_prompt.runner` when present in the YAML, else `null`. */
+  runner?: string | null;
   /** Absolute path of the `.remargin.yaml` that declared the prompt. */
   source: string;
 }

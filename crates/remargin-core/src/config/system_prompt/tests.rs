@@ -179,6 +179,71 @@ fn vault_root_explicit_prompt_not_default() {
 }
 
 #[test]
+fn runner_carried_on_hit_and_null_when_absent() {
+    let system = MockSystem::new()
+        .with_dir(Path::new("/vault/a"))
+        .unwrap()
+        .with_dir(Path::new("/vault/b"))
+        .unwrap()
+        .with_file(
+            Path::new("/vault/a/.remargin.yaml"),
+            b"system_prompt:\n  name: with-runner\n  prompt: body\n  runner: goose run -i -\n",
+        )
+        .unwrap()
+        .with_file(
+            Path::new("/vault/b/.remargin.yaml"),
+            b"system_prompt:\n  name: plain\n  prompt: body\n",
+        )
+        .unwrap();
+
+    let with = resolve_system_prompt(&system, Path::new("/vault/a/file.md")).unwrap();
+    assert_eq!(with.runner.as_deref(), Some("goose run -i -"));
+    let without = resolve_system_prompt(&system, Path::new("/vault/b/file.md")).unwrap();
+    assert_eq!(without.runner, None);
+}
+
+#[test]
+fn default_fallback_has_no_runner() {
+    let system = MockSystem::new().with_dir(Path::new("/vault/a")).unwrap();
+
+    let resolved = resolve_system_prompt(&system, Path::new("/vault/a/file.md")).unwrap();
+    assert!(resolved.is_default);
+    assert_eq!(resolved.runner, None);
+}
+
+#[test]
+fn multiline_runner_errors() {
+    let system = MockSystem::new()
+        .with_dir(Path::new("/vault/a"))
+        .unwrap()
+        .with_file(
+            Path::new("/vault/a/.remargin.yaml"),
+            b"system_prompt:\n  name: bad\n  prompt: body\n  runner: |\n    one\n    two\n",
+        )
+        .unwrap();
+
+    let err = resolve_system_prompt(&system, Path::new("/vault/a/file.md")).unwrap_err();
+    let chain = format!("{err:#}");
+    assert!(chain.contains("runner must be a single line"), "{chain}");
+}
+
+#[test]
+fn render_resolved_prompt_includes_runner_line() {
+    let system = MockSystem::new()
+        .with_dir(Path::new("/vault/a"))
+        .unwrap()
+        .with_file(
+            Path::new("/vault/a/.remargin.yaml"),
+            b"system_prompt:\n  name: with-runner\n  prompt: body\n  runner: goose run -i -\n",
+        )
+        .unwrap();
+
+    let resolved = resolve_system_prompt(&system, Path::new("/vault/a/file.md")).unwrap();
+    let text = super::render_resolved_prompt(Path::new("/vault/a/file.md"), &resolved);
+    assert!(text.contains("Runner:  goose run -i -"), "{text}");
+}
+
+#[test]
 fn missing_prompt_field_errors() {
     let system = MockSystem::new()
         .with_dir(Path::new("/vault/a"))

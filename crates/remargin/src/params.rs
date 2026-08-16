@@ -137,6 +137,7 @@ pub struct PromptSetParams<'params> {
     pub json_mode: bool,
     pub name: &'params str,
     pub prompt_flag: Option<&'params str>,
+    pub runner: Option<&'params str>,
 }
 
 pub struct QueryParams<'cmd> {

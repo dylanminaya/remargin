@@ -86,6 +86,11 @@ pub struct SystemPrompt {
     /// The literal prompt body. Written verbatim into the AI payload
     /// by the caller — this loader does no templating.
     pub prompt: String,
+    /// Optional single-line command the composed prompt is piped into
+    /// (stdin contract: `cat <promptfile> | <runner>`). Absent = the
+    /// caller's default runner.
+    #[serde(default)]
+    pub runner: Option<String>,
 }
 
 /// Per-agent session parameters for `remargin session launch`.

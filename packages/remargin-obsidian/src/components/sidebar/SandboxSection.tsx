@@ -1,14 +1,4 @@
-import {
-  Check,
-  ChevronDown,
-  ChevronRight,
-  CircleDashed,
-  Folder,
-  Loader2,
-  Send,
-  Sparkles,
-  TriangleAlert,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, CircleDashed, Folder, Send, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ResolvedSystemPrompt } from "@/backend/types";
 import {
@@ -16,8 +6,6 @@ import {
   DEFAULT_GROUP_KEY,
   type PromptGroup,
   type StagedGroup,
-  type SubmitGroupResult,
-  type SubmitProgress,
 } from "@/components/sidebar/buildPromptGroups";
 import {
   InlinePromptEditor,
@@ -29,7 +17,6 @@ import { SandboxRow } from "@/components/sidebar/SandboxRow";
 import { ObsidianIcon } from "@/components/ui/ObsidianIcon";
 import { useBackend } from "@/hooks/useBackend";
 import { buildFileTree, type FileTreeNode } from "@/lib/buildFileTree";
-import { submitLogPath } from "@/lib/submitLogPath";
 import type { ViewMode } from "@/types";
 
 export type { PromptGroup, StagedGroup };
@@ -51,17 +38,10 @@ interface SandboxSectionProps {
   onOpenFile?: (path: string) => void;
   /**
    * Forwarded Submit handler. Receives the staged files grouped by
-   * resolved system prompt + a progress hook the parent can call as
-   * each group starts and completes. Returns per-group results so this
-   * section can render success/failure badges.
-   *
-   * The handler now owns the per-group cleanup (`sandboxRemove`) so the
-   * sandbox section stays purely structural.
+   * resolved system prompt. The handler launches a terminal running
+   * the composed commands, fire-and-forget — no completion tracking.
    */
-  onSubmit?: (
-    groups: StagedGroup[],
-    progress?: SubmitProgress
-  ) => Promise<SubmitGroupResult[] | void> | void;
+  onSubmit?: (groups: StagedGroup[]) => Promise<void> | void;
   /**
    * Persist a `system_prompt:` block to the owning `.remargin.yaml`.
    * Receives the target path, name, and body. Returning resolves the
@@ -91,12 +71,6 @@ interface SandboxSectionProps {
    * vault-relative path (e.g. `./src/01_personal/remargin/`).
    */
   vaultRoot?: string;
-  /**
-   * Called with an absolute log-file path so the caller can open it in
-   * an Obsidian leaf. Invoked once per group at Submit time (for live
-   * tail) and again when the user clicks a failed group's log link.
-   */
-  onOpenLog?: (logPath: string) => void;
 }
 
 // WHY: the backend returns absolute host paths in resolved.source; the
@@ -111,17 +85,6 @@ function formatScopeRelative(scope: string, vaultRoot?: string): string {
   if (rel.length === 0) return "./";
   if (rel.startsWith("/")) return rel;
   return `./${rel}/`;
-}
-
-function firstErrorLine(raw?: string): string | undefined {
-  if (!raw) return undefined;
-  const lines = raw
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-  if (lines.length === 0) return undefined;
-  const flagged = lines.find((l) => /error|fail/i.test(l));
-  return flagged ?? lines[0];
 }
 
 function errorMessage(err: unknown): string {
@@ -144,7 +107,6 @@ export function SandboxSection({
   savePromptDisabledReason,
   availableFolders,
   vaultRoot,
-  onOpenLog,
 }: SandboxSectionProps) {
   const backend = useBackend();
   const [files, setFiles] = useState<string[]>([]);
@@ -279,65 +241,16 @@ export function SandboxSection({
     [backend]
   );
 
-  // Per-group submit status. Keys are the group's source ?? DEFAULT_GROUP_KEY.
-  // Each group's status is cleared when its own Submit is fired again.
-  const [groupStatus, setGroupStatus] = useState<Map<string, "pending" | "ok" | "failed">>(
-    new Map()
-  );
-  const [groupErrors, setGroupErrors] = useState<Map<string, string>>(new Map());
-  const [groupLogPaths, setGroupLogPaths] = useState<Map<string, string>>(new Map());
-
-  const buildStagedWithLog = useCallback(
-    (group: PromptGroup, stagedFiles: string[]): StagedGroup => {
-      const lp = vaultRoot ? submitLogPath(vaultRoot, group.prompt.name) : undefined;
-      const key = group.source ?? DEFAULT_GROUP_KEY;
-      if (lp) {
-        setGroupLogPaths((prev) => new Map(prev).set(key, lp));
-        onOpenLog?.(lp);
-      }
-      return { prompt: group.prompt, files: stagedFiles, logPath: lp };
-    },
-    [vaultRoot, onOpenLog]
-  );
-
   const handleSubmitGroup = useCallback(
     async (group: PromptGroup) => {
       if (submitting) return;
       if (group.hasError) return;
       const stagedFiles = group.files.filter((f) => staged.has(f));
       if (stagedFiles.length === 0) return;
-      const key = group.source ?? DEFAULT_GROUP_KEY;
       setSubmitting(true);
       setError(null);
-      setGroupStatus((prev) => {
-        const next = new Map(prev);
-        next.delete(key);
-        return next;
-      });
-      setGroupErrors((prev) => {
-        const next = new Map(prev);
-        next.delete(key);
-        return next;
-      });
-
-      const payload: StagedGroup[] = [buildStagedWithLog(group, stagedFiles)];
-
-      const progress: SubmitProgress = {
-        onGroupStart: (g) => {
-          const k = g.prompt.source ?? DEFAULT_GROUP_KEY;
-          setGroupStatus((prev) => new Map(prev).set(k, "pending"));
-        },
-        onGroupComplete: (g, result) => {
-          const k = g.prompt.source ?? DEFAULT_GROUP_KEY;
-          setGroupStatus((prev) => new Map(prev).set(k, result.ok ? "ok" : "failed"));
-          if (result.error) {
-            setGroupErrors((prev) => new Map(prev).set(k, result.error ?? "submit failed"));
-          }
-        },
-      };
-
       try {
-        await onSubmit?.(payload, progress);
+        await onSubmit?.([{ prompt: group.prompt, files: stagedFiles }]);
       } catch (err) {
         console.error("SandboxSection.onSubmit failed:", err);
         setError(errorMessage(err));
@@ -345,7 +258,7 @@ export function SandboxSection({
         setSubmitting(false);
       }
     },
-    [submitting, staged, onSubmit, buildStagedWithLog]
+    [submitting, staged, onSubmit]
   );
 
   const eligibleSubmitGroups = useMemo(
@@ -361,31 +274,19 @@ export function SandboxSection({
     if (submitting || eligibleSubmitGroups.length === 0) return;
     setSubmitting(true);
     setError(null);
-    setGroupStatus(new Map());
-    setGroupErrors(new Map());
-    const payload: StagedGroup[] = eligibleSubmitGroups.map((g) => buildStagedWithLog(g, g.staged));
-    const progress: SubmitProgress = {
-      onGroupStart: (g) => {
-        const k = g.prompt.source ?? DEFAULT_GROUP_KEY;
-        setGroupStatus((prev) => new Map(prev).set(k, "pending"));
-      },
-      onGroupComplete: (g, result) => {
-        const k = g.prompt.source ?? DEFAULT_GROUP_KEY;
-        setGroupStatus((prev) => new Map(prev).set(k, result.ok ? "ok" : "failed"));
-        if (result.error) {
-          setGroupErrors((prev) => new Map(prev).set(k, result.error ?? "submit failed"));
-        }
-      },
-    };
+    const payload: StagedGroup[] = eligibleSubmitGroups.map((g) => ({
+      prompt: g.prompt,
+      files: g.staged,
+    }));
     try {
-      await onSubmit?.(payload, progress);
+      await onSubmit?.(payload);
     } catch (err) {
       console.error("SandboxSection.handleSubmitAll failed:", err);
       setError(errorMessage(err));
     } finally {
       setSubmitting(false);
     }
-  }, [submitting, eligibleSubmitGroups, onSubmit, buildStagedWithLog]);
+  }, [submitting, eligibleSubmitGroups, onSubmit]);
 
   if (loading && files.length === 0) {
     return <div className="px-4 py-3 text-xs text-text-faint">Loading sandbox...</div>;
@@ -419,8 +320,6 @@ export function SandboxSection({
               selected={selected}
               stagedOpen={stagedOpenByGroup.get(key) ?? true}
               unstagedOpen={unstagedOpenByGroup.get(key) ?? true}
-              status={groupStatus.get(key)}
-              statusError={groupErrors.get(key)}
               onToggleStagedOpen={() => setStagedOpen(key, !(stagedOpenByGroup.get(key) ?? true))}
               onToggleUnstagedOpen={() =>
                 setUnstagedOpen(key, !(unstagedOpenByGroup.get(key) ?? true))
@@ -438,8 +337,6 @@ export function SandboxSection({
               vaultRoot={vaultRoot}
               onSubmitGroup={handleSubmitGroup}
               submitting={submitting}
-              logPath={groupLogPaths.get(key)}
-              onOpenLog={onOpenLog}
             />
           );
         })}
@@ -523,14 +420,6 @@ export interface PromptGroupSectionProps {
   selected: Set<string>;
   stagedOpen: boolean;
   unstagedOpen: boolean;
-  /**
-   * Submit-all status for this group. `pending` while `claude -p` is
-   * in flight, `ok` after a successful invocation + cleanup, `failed`
-   * when the run rejected. `undefined` between runs.
-   */
-  status?: "pending" | "ok" | "failed";
-  /** Error message for the failed status, surfaced as a tooltip. */
-  statusError?: string;
   onToggleStagedOpen: () => void;
   onToggleUnstagedOpen: () => void;
   onToggleSelected: (path: string) => void;
@@ -550,10 +439,6 @@ export interface PromptGroupSectionProps {
   onSubmitGroup?: (group: PromptGroup) => void | Promise<void>;
   /** True while any group's Submit is in flight; disables every group's Submit. */
   submitting?: boolean;
-  /** Absolute log-file path for this group's most recent submit, if any. */
-  logPath?: string;
-  /** Click handler bound to the failed-status icon when a logPath exists. */
-  onOpenLog?: (logPath: string) => void;
 }
 
 // Exported for component-test isolation; internal in production use.
@@ -563,8 +448,6 @@ export function PromptGroupSection({
   selected,
   stagedOpen,
   unstagedOpen,
-  status,
-  statusError,
   onToggleStagedOpen,
   onToggleUnstagedOpen,
   onToggleSelected,
@@ -580,8 +463,6 @@ export function PromptGroupSection({
   vaultRoot,
   onSubmitGroup,
   submitting,
-  logPath,
-  onOpenLog,
 }: PromptGroupSectionProps) {
   const [headerOpen, setHeaderOpen] = useState(true);
   const [editing, setEditing] = useState(false);
@@ -651,38 +532,6 @@ export function PromptGroupSection({
           <PromptIcon className="rmg-l2__icon" />
           <span className="rmg-l2__title">{group.name}</span>
           <span className="rmg-l2__count">{group.files.length}</span>
-          {status === "pending" && (
-            <span className="rmg-l2__status rmg-l2__status--pending">
-              <Loader2 className="animate-spin" aria-label="Submitting" />
-            </span>
-          )}
-          {status === "ok" && (
-            <span className="rmg-l2__status rmg-l2__status--ok text-green-500">
-              <Check aria-label="Submitted" />
-            </span>
-          )}
-          {status === "failed" &&
-            (logPath && onOpenLog ? (
-              <button
-                type="button"
-                className="rmg-icon-btn rmg-icon-btn--sm rmg-l2__status rmg-l2__status--fail text-red-400"
-                title={firstErrorLine(statusError) ?? "Open submit log"}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenLog(logPath);
-                }}
-                aria-label="Open submit log"
-              >
-                <TriangleAlert />
-              </button>
-            ) : (
-              <span
-                className="rmg-l2__status rmg-l2__status--fail text-red-400"
-                title={statusError}
-              >
-                <TriangleAlert aria-label="Submit failed" />
-              </span>
-            ))}
         </div>
         <div className="rmg-l2__actions">
           {group.isDefault && !group.hasError && !editing && (
@@ -726,6 +575,7 @@ export function PromptGroupSection({
           folder={group.isDefault ? folderHint() : group.source ? group.scope : folderHint()}
           initialName={group.isDefault ? "" : group.name}
           initialBody={group.isDefault ? "" : group.prompt.prompt}
+          initialRunner={group.isDefault ? "" : (group.prompt.runner ?? "")}
           onSave={handleSave}
           onDelete={!group.isDefault && onDeletePrompt ? handleDelete : undefined}
           onCancel={() => setEditing(false)}

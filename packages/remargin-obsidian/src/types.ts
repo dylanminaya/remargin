@@ -14,6 +14,11 @@ export type InboxFilter = "for-me" | "from-me" | "unassigned" | "pending" | "all
 export interface RemarginSettings {
   remarginPath: string;
   claudePath: string;
+  /**
+   * Terminal emulator argv prefix for sandbox Submit, e.g. `ptyxis --`
+   * or `kitty -e`. Empty = auto-detect per OS.
+   */
+  terminalCommand: string;
   workingDirectory: string;
   identityMode: "config" | "manual";
   configFilePath: string;
@@ -72,6 +77,7 @@ export function clampMarkdownScale(value: number): number {
 export const DEFAULT_SETTINGS: RemarginSettings = {
   remarginPath: "remargin",
   claudePath: "claude",
+  terminalCommand: "",
   workingDirectory: "",
   identityMode: "manual",
   configFilePath: "",

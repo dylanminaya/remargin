@@ -671,6 +671,7 @@ fn handle_prompt(
             folder,
             name,
             prompt,
+            runner,
             output_args: a,
         } => handlers::cmd_prompt_set(
             sinks,
@@ -682,6 +683,7 @@ fn handle_prompt(
                 json_mode: cmd_json || a.json,
                 name,
                 prompt_flag: prompt.as_deref(),
+                runner: runner.as_deref(),
             },
         ),
         PromptAction::Delete {

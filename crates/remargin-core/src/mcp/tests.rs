@@ -6068,6 +6068,95 @@ fn prompt_resolve_absolute_and_relative_paths_match() {
 }
 
 #[test]
+fn prompt_set_runner_round_trips_and_clears() {
+    let base = Path::new("/vault");
+    let system = MockSystem::new().with_dir(base.join("a")).unwrap();
+    let config = test_config();
+
+    let set_response = call(
+        &system,
+        base,
+        &config,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1_i32,
+            "method": "tools/call",
+            "params": {
+                "name": "prompt_set",
+                "arguments": {
+                    "folder": "a",
+                    "name": "reviewer",
+                    "prompt": "review",
+                    "runner": "goose run -i -"
+                }
+            }
+        }),
+    );
+    assert!(
+        !is_tool_error(&set_response),
+        "prompt_set failed: {set_response}"
+    );
+
+    let resolve_response = call(
+        &system,
+        base,
+        &config,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2_i32,
+            "method": "tools/call",
+            "params": {
+                "name": "prompt_resolve",
+                "arguments": { "file": "a/file.md" }
+            }
+        }),
+    );
+    let resolved = extract_tool_text(&resolve_response);
+    assert_eq!(resolved["runner"], "goose run -i -");
+
+    // Replacing the block without `runner` clears the stored one.
+    let clear_response = call(
+        &system,
+        base,
+        &config,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 3_i32,
+            "method": "tools/call",
+            "params": {
+                "name": "prompt_set",
+                "arguments": {
+                    "folder": "a",
+                    "name": "reviewer",
+                    "prompt": "review"
+                }
+            }
+        }),
+    );
+    assert!(
+        !is_tool_error(&clear_response),
+        "prompt_set failed: {clear_response}"
+    );
+
+    let recheck_response = call(
+        &system,
+        base,
+        &config,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 4_i32,
+            "method": "tools/call",
+            "params": {
+                "name": "prompt_resolve",
+                "arguments": { "file": "a/file.md" }
+            }
+        }),
+    );
+    let rechecked = extract_tool_text(&recheck_response);
+    assert!(rechecked["runner"].is_null(), "payload: {rechecked}");
+}
+
+#[test]
 fn mcp_reply_acks_parent_when_authors_differ() {
     // Parent `aaa` authored by `eduardo`; caller is `tester`. Smart
     // default (auto_ack omitted) must ack the parent.

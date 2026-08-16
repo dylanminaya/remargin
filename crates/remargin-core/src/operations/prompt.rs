@@ -50,6 +50,9 @@ pub struct PromptListEntry {
     /// Verbatim prompt body. Callers that don't want huge JSON should
     /// truncate at the adapter layer.
     pub prompt: String,
+    /// `system_prompt.runner`, if set in the YAML. `None` means the
+    /// caller's default runner.
+    pub runner: Option<String>,
     /// Absolute path of the `.remargin.yaml` that declared the prompt.
     pub source: PathBuf,
 }
@@ -80,6 +83,8 @@ pub(crate) struct SpliceResult {
 pub(crate) struct SystemPromptBlock<'block> {
     pub name: &'block str,
     pub prompt: &'block str,
+    /// Empty = absent (no `runner:` line rendered).
+    pub runner: &'block str,
 }
 
 /// Strip the `system_prompt:` block from `<folder>/.remargin.yaml`.
@@ -182,6 +187,10 @@ pub fn list(system: &dyn System, root: &Path) -> Result<Vec<PromptListEntry>> {
             .and_then(|v| v.as_str())
             .map(String::from)
             .unwrap_or_default();
+        let runner = sp_map
+            .get(serde_yaml::Value::String(String::from("runner")))
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let folder = entry
             .path
             .parent()
@@ -191,6 +200,7 @@ pub fn list(system: &dyn System, root: &Path) -> Result<Vec<PromptListEntry>> {
             folder,
             name,
             prompt,
+            runner,
             source: entry.path.clone(),
         });
     }
@@ -218,9 +228,13 @@ pub fn set(
     folder: &Path,
     name: Option<&str>,
     body: &str,
+    runner: Option<&str>,
     config: &ResolvedConfig,
 ) -> Result<PromptSetOutcome> {
     ensure_folder(system, folder)?;
+    if runner.is_some_and(|r| r.contains('\n')) {
+        bail!("runner must be a single line");
+    }
     let target = folder.join(".remargin.yaml");
 
     pre_mutate_check_for_caller(system, "write", &target, &config.caller_info())
@@ -235,6 +249,7 @@ pub fn set(
         &SystemPromptBlock {
             name: name.unwrap_or(""),
             prompt: body,
+            runner: runner.unwrap_or(""),
         },
     );
     if result.noop {
@@ -408,6 +423,9 @@ pub(crate) fn render_block(block: &SystemPromptBlock<'_>) -> String {
         lines.push(format!("  name: {}", quote_scalar(block.name)));
     }
     lines.extend(render_prompt_field(block.prompt));
+    if !block.runner.is_empty() {
+        lines.push(format!("  runner: {}", quote_scalar(block.runner)));
+    }
     let mut out = lines.join("\n");
     out.push('\n');
     out

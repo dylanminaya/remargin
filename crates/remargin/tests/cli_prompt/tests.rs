@@ -118,6 +118,133 @@ fn resolve_in_strict_realm_without_key_still_works() {
 }
 
 #[test]
+fn set_runner_round_trips_through_resolve_json() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(tmp.path().join("doc.md"), "# Hi\n").unwrap();
+
+    let output = Command::cargo_bin("remargin")
+        .unwrap()
+        .current_dir(tmp.path())
+        .env("HOME", tmp.path())
+        .args([
+            "prompt",
+            "set",
+            ".",
+            "--name",
+            "reviewer",
+            "--prompt",
+            "review",
+            "--runner",
+            "goose run -i -",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "command failed: {output:?}");
+    let yaml = fs::read_to_string(tmp.path().join(".remargin.yaml")).unwrap();
+    assert!(yaml.contains("runner: goose run -i -"), "yaml: {yaml}");
+
+    let resolve_output = Command::cargo_bin("remargin")
+        .unwrap()
+        .current_dir(tmp.path())
+        .env("HOME", tmp.path())
+        .args(["prompt", "resolve", "doc.md", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        resolve_output.status.success(),
+        "command failed: {resolve_output:?}"
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(str::from_utf8(&resolve_output.stdout).unwrap()).unwrap();
+    assert_eq!(json["runner"], "goose run -i -");
+}
+
+#[test]
+fn set_without_runner_clears_existing_runner() {
+    let tmp = TempDir::new().unwrap();
+    write_yaml(
+        &tmp,
+        ".remargin.yaml",
+        "system_prompt:\n  name: reviewer\n  prompt: review\n  runner: goose run -i -\n",
+    );
+    fs::write(tmp.path().join("doc.md"), "# Hi\n").unwrap();
+
+    let output = Command::cargo_bin("remargin")
+        .unwrap()
+        .current_dir(tmp.path())
+        .env("HOME", tmp.path())
+        .args([
+            "prompt", "set", ".", "--name", "reviewer", "--prompt", "review",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "command failed: {output:?}");
+    let yaml = fs::read_to_string(tmp.path().join(".remargin.yaml")).unwrap();
+    assert!(!yaml.contains("runner:"), "yaml: {yaml}");
+
+    let resolve_output = Command::cargo_bin("remargin")
+        .unwrap()
+        .current_dir(tmp.path())
+        .env("HOME", tmp.path())
+        .args(["prompt", "resolve", "doc.md", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        resolve_output.status.success(),
+        "command failed: {resolve_output:?}"
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(str::from_utf8(&resolve_output.stdout).unwrap()).unwrap();
+    assert!(json["runner"].is_null(), "json: {json}");
+}
+
+#[test]
+fn set_rejects_multiline_runner() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = Command::cargo_bin("remargin")
+        .unwrap()
+        .current_dir(tmp.path())
+        .env("HOME", tmp.path())
+        .args([
+            "prompt", "set", ".", "--name", "reviewer", "--prompt", "review", "--runner",
+            "one\ntwo",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "expected failure: {output:?}");
+    let stderr = str::from_utf8(&output.stderr).unwrap();
+    assert!(
+        stderr.contains("runner must be a single line"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn resolve_json_null_runner_for_pre_runner_config() {
+    let tmp = TempDir::new().unwrap();
+    write_yaml(
+        &tmp,
+        ".remargin.yaml",
+        "system_prompt:\n  name: docs\n  prompt: do the thing\n",
+    );
+    fs::write(tmp.path().join("doc.md"), "# Hi\n").unwrap();
+
+    let output = Command::cargo_bin("remargin")
+        .unwrap()
+        .current_dir(tmp.path())
+        .env("HOME", tmp.path())
+        .args(["prompt", "resolve", "doc.md", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "command failed: {output:?}");
+    let stdout = str::from_utf8(&output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout).unwrap();
+    assert_eq!(json["name"], "docs");
+    assert!(json["runner"].is_null(), "json: {json}");
+}
+
+#[test]
 fn resolve_nonexistent_file_uses_parent_walk() {
     let tmp = TempDir::new().unwrap();
     write_yaml(

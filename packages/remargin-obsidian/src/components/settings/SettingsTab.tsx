@@ -255,6 +255,18 @@ export function SettingsTab({ settings, onSave, onCheckUpdates }: SettingsTabPro
         </SettingsField>
 
         <SettingsField
+          label="Terminal command"
+          description="Terminal emulator argv prefix used by sandbox Submit, e.g. `ptyxis --` or `kitty -e`. Leave empty to auto-detect (Linux terminal scan, macOS Terminal.app)."
+        >
+          <Input
+            value={current.terminalCommand}
+            onChange={(e) => update("terminalCommand", e.target.value)}
+            placeholder="(auto-detect)"
+            className="font-mono text-sm bg-bg-primary border-bg-border"
+          />
+        </SettingsField>
+
+        <SettingsField
           label="Working directory"
           description="Base directory for remargin operations. Supports ~ and $HOME. Leave empty to use vault root."
         >

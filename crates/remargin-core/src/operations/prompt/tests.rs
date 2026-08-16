@@ -54,6 +54,7 @@ fn splice_appends_to_file_without_block() {
         &SystemPromptBlock {
             name: "Reviewer",
             prompt: "Review code.",
+            runner: "",
         },
     );
     let expected = "identity: eduardo\ntype: human\n\nsystem_prompt:\n  name: Reviewer\n  prompt: Review code.\n";
@@ -75,6 +76,7 @@ mode: open
         &SystemPromptBlock {
             name: "New",
             prompt: "new",
+            runner: "",
         },
     );
     let expected = "\
@@ -94,6 +96,7 @@ fn splice_multiline_body_uses_block_scalar() {
         &SystemPromptBlock {
             name: "Multi",
             prompt: "line one\nline two\nline three",
+            runner: "",
         },
     );
     let expected = "\
@@ -114,6 +117,7 @@ fn splice_special_chars_force_block_style() {
         &SystemPromptBlock {
             name: "X",
             prompt: "value with: colon and # hash",
+            runner: "",
         },
     );
     assert!(out.content.contains("  prompt: |"));
@@ -127,6 +131,7 @@ fn splice_empty_body_writes_empty_quotes() {
         &SystemPromptBlock {
             name: "Empty",
             prompt: "",
+            runner: "",
         },
     );
     assert!(out.content.contains("  prompt: \"\""));
@@ -139,6 +144,7 @@ fn splice_omits_name_line_when_empty() {
         &SystemPromptBlock {
             name: "",
             prompt: "body",
+            runner: "",
         },
     );
     assert!(!out.content.contains("  name:"));
@@ -153,9 +159,39 @@ fn splice_noop_when_identical() {
         &SystemPromptBlock {
             name: "Same",
             prompt: "same",
+            runner: "",
         },
     );
     assert!(out.noop);
+}
+
+#[test]
+fn splice_renders_runner_after_prompt() {
+    let out = splice_system_prompt(
+        "",
+        &SystemPromptBlock {
+            name: "R",
+            prompt: "body",
+            runner: "goose run -i -",
+        },
+    );
+    let expected = "system_prompt:\n  name: R\n  prompt: body\n  runner: goose run -i -\n";
+    assert_eq!(out.content, expected);
+}
+
+#[test]
+fn splice_replacing_block_drops_stale_runner() {
+    let existing = "system_prompt:\n  name: R\n  prompt: body\n  runner: goose run -i -\n";
+    let out = splice_system_prompt(
+        existing,
+        &SystemPromptBlock {
+            name: "R",
+            prompt: "body",
+            runner: "",
+        },
+    );
+    assert!(!out.content.contains("runner:"));
+    assert!(out.content.contains("  prompt: body"));
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +280,7 @@ fn set_creates_yaml_when_absent() {
         Path::new("/vault/foo"),
         Some("Reviewer"),
         "Review.",
+        None,
         &open_config(),
     )
     .unwrap();
@@ -267,6 +304,7 @@ fn set_preserves_identity_field() {
         Path::new("/vault/foo"),
         Some("Reviewer"),
         "Review.",
+        None,
         &open_config(),
     )
     .unwrap();
@@ -288,6 +326,7 @@ fn set_replaces_existing_block() {
         Path::new("/vault/foo"),
         Some("New"),
         "new",
+        None,
         &open_config(),
     )
     .unwrap();
@@ -305,6 +344,7 @@ fn set_refuses_non_directory() {
         Path::new("/vault/foo/a.md"),
         Some("X"),
         "y",
+        None,
         &open_config(),
     )
     .unwrap_err();
@@ -316,6 +356,63 @@ fn set_refuses_non_directory() {
 }
 
 #[test]
+fn set_writes_runner_line() {
+    let system = MockSystem::new();
+    mkdir(&system, "/vault/foo");
+    set(
+        &system,
+        Path::new("/vault/foo"),
+        Some("Reviewer"),
+        "Review.",
+        Some("goose run -i -"),
+        &open_config(),
+    )
+    .unwrap();
+    let body = read_file(&system, "/vault/foo/.remargin.yaml");
+    assert!(body.contains("  runner: goose run -i -"), "{body}");
+}
+
+#[test]
+fn set_without_runner_clears_existing_runner() {
+    let system = MockSystem::new();
+    write_file(
+        &system,
+        "/vault/foo/.remargin.yaml",
+        "system_prompt:\n  name: R\n  prompt: body\n  runner: goose run -i -\n",
+    );
+    set(
+        &system,
+        Path::new("/vault/foo"),
+        Some("R"),
+        "body",
+        None,
+        &open_config(),
+    )
+    .unwrap();
+    let body = read_file(&system, "/vault/foo/.remargin.yaml");
+    assert!(!body.contains("runner:"), "{body}");
+}
+
+#[test]
+fn set_rejects_multiline_runner() {
+    let system = MockSystem::new();
+    mkdir(&system, "/vault/foo");
+    let err = set(
+        &system,
+        Path::new("/vault/foo"),
+        Some("R"),
+        "body",
+        Some("line one\nline two"),
+        &open_config(),
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("runner must be a single line"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
 fn set_refuses_missing_folder() {
     let system = MockSystem::new();
     let err = set(
@@ -323,6 +420,7 @@ fn set_refuses_missing_folder() {
         Path::new("/missing"),
         Some("X"),
         "y",
+        None,
         &open_config(),
     )
     .unwrap_err();
@@ -434,6 +532,32 @@ fn list_finds_declared_prompts() {
         .unwrap();
     assert_eq!(c.name, None);
     assert_eq!(c.prompt, "cc");
+}
+
+#[test]
+fn list_carries_runner_when_declared() {
+    let system = MockSystem::new();
+    write_file(
+        &system,
+        "/vault/a/.remargin.yaml",
+        "system_prompt:\n  name: A\n  prompt: aa\n  runner: goose run -i -\n",
+    );
+    write_file(
+        &system,
+        "/vault/b/.remargin.yaml",
+        "system_prompt:\n  name: B\n  prompt: bb\n",
+    );
+    let out = list(&system, Path::new("/vault")).unwrap();
+    let a = out
+        .iter()
+        .find(|e| e.source.as_path() == Path::new("/vault/a/.remargin.yaml"))
+        .unwrap();
+    assert_eq!(a.runner.as_deref(), Some("goose run -i -"));
+    let b = out
+        .iter()
+        .find(|e| e.source.as_path() == Path::new("/vault/b/.remargin.yaml"))
+        .unwrap();
+    assert_eq!(b.runner, None);
 }
 
 #[test]
