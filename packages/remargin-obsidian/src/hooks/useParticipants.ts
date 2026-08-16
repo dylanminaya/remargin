@@ -55,7 +55,6 @@ export function useParticipants(): UseParticipantsResult {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `key` drives module-level cache invalidation; the effect body reads the refreshed cache promise but never references `key` directly.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);

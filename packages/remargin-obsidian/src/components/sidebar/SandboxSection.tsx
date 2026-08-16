@@ -9,7 +9,7 @@ import {
   Sparkles,
   TriangleAlert,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ResolvedSystemPrompt } from "@/backend/types";
 import {
   buildPromptGroups,
@@ -23,6 +23,7 @@ import {
   InlinePromptEditor,
   type InlinePromptEditorSaveArgs,
 } from "@/components/sidebar/InlinePromptEditor";
+import { readToken } from "@/components/sidebar/readToken";
 import { SandboxGroupHeader } from "@/components/sidebar/SandboxGroupHeader";
 import { SandboxRow } from "@/components/sidebar/SandboxRow";
 import { ObsidianIcon } from "@/components/ui/ObsidianIcon";
@@ -158,15 +159,23 @@ export function SandboxSection({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // A removal invalidates the list just like a parent bump does, so it
+  // advances a counter of our own and re-lists through the same effect —
+  // earning its own token instead of racing the parent's listing.
+  const [localRefresh, setLocalRefresh] = useState(0);
+  // Token of the newest listing issued. Every run tags itself and
+  // re-checks the tag before touching state, so a slow response a newer
+  // listing has superseded is dropped rather than overwriting it — the
+  // `resolvePrompt` fan-out especially, which can finish out of order.
+  const newestListing = useRef<string | null>(null);
+
   const refresh = useCallback(
-    async (_key?: number) => {
-      // `_key` is accepted so the useEffect below can pass `refreshKey` and
-      // satisfy the useExhaustiveDependencies lint — the value itself is
-      // unused; it just ensures the callback identity is tied to the current
-      // refresh generation.
+    async (token: string) => {
+      newestListing.current = token;
       setLoading(true);
       try {
         const entries = await backend.sandboxList();
+        if (newestListing.current !== token) return;
         const paths = entries.map((e) => e.path);
         setFiles(paths);
         setStaged((prev) => {
@@ -203,25 +212,29 @@ export function SandboxSection({
             }
           })
         );
+        if (newestListing.current !== token) return;
         setPrompts(nextPrompts);
         setResolveErrors(nextErrors);
         setError(null);
       } catch (err) {
         console.error("SandboxSection.refresh failed:", err);
+        if (newestListing.current !== token) return;
         setFiles([]);
         setPrompts(new Map());
         setResolveErrors(new Map());
         setError(errorMessage(err));
       } finally {
-        setLoading(false);
+        // A superseded run leaves the loading state to the listing that
+        // replaced it, so the section never flashes an empty sandbox.
+        if (newestListing.current === token) setLoading(false);
       }
     },
     [backend]
   );
 
   useEffect(() => {
-    void refresh(refreshKey);
-  }, [refresh, refreshKey]);
+    void refresh(readToken(refreshKey ?? 0, localRefresh));
+  }, [refresh, refreshKey, localRefresh]);
 
   const groups = useMemo<PromptGroup[]>(
     () => buildPromptGroups(files, prompts, resolveErrors, staged),
@@ -257,13 +270,13 @@ export function SandboxSection({
     async (path: string) => {
       try {
         await backend.sandboxRemove([path]);
-        await refresh();
+        setLocalRefresh((n) => n + 1);
       } catch (err) {
         console.error("SandboxSection.handleRemove failed:", err);
         setError(errorMessage(err));
       }
     },
-    [backend, refresh]
+    [backend]
   );
 
   // Per-group submit status. Keys are the group's source ?? DEFAULT_GROUP_KEY.

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { CommentCard } from "@/components/sidebar/CommentCard";
 import { KindFilterBar } from "@/components/sidebar/KindFilterBar";
+import { readToken } from "@/components/sidebar/readToken";
 import { findRadixScrollViewport } from "@/components/sidebar/scrollViewport";
 import type { Comment } from "@/generated";
 import { useBackend } from "@/hooks/useBackend";
@@ -66,10 +67,12 @@ export function ThreadedComments({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [me, setMe] = useState<string | null>(null);
-  // Snapshot/restore scrollTop across refetches so a reply doesn't jump the list to the top.
+  // Scroll offset to reinstate once a refetched list commits, so a reply
+  // doesn't jump the list to the top. A fresh object per refetch, so the
+  // layout effect below still fires when the offset repeats.
+  const [scrollRestore, setScrollRestore] = useState<{ top: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollViewportRef = useRef<HTMLElement | null>(null);
-  const pendingScrollTopRef = useRef<number | null>(null);
 
   const findScrollViewport = useCallback((): HTMLElement | null => {
     if (scrollViewportRef.current && document.contains(scrollViewportRef.current)) {
@@ -80,57 +83,65 @@ export function ThreadedComments({
     return found;
   }, []);
 
-  const refresh = useCallback(async () => {
-    // Snapshot the current scroll offset so `useLayoutEffect` can
-    // restore it after the new comment list commits. Only matters for
-    // in-place refetches — on first mount there's nothing to preserve.
-    const viewport = findScrollViewport();
-    if (viewport) {
-      pendingScrollTopRef.current = viewport.scrollTop;
-    }
-    try {
-      const result = await backend.comments(file);
-      setComments(result);
-      setError(null);
-    } catch (err) {
-      console.error("ThreadedComments.refresh failed:", err);
-      setComments([]);
-      setError(errorMessage(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [backend, file, findScrollViewport]);
+  // Token of the newest fetch issued. Every run tags itself and re-checks
+  // the tag before touching state, so a slow response that a newer fetch
+  // has already superseded is dropped instead of overwriting it.
+  const newestFetch = useRef<string | null>(null);
+  // File the rendered list belongs to. A mismatch means the user switched
+  // files and what is on screen no longer describes `file`.
+  const renderedFile = useRef<string | null>(null);
 
-  // Reset `loading` when the user switches to a different file — that's
-  // the one case where we do want the placeholder, because the previous
-  // file's list is no longer meaningful. `file` is a trigger-only dep.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: file is a trigger, not a read
-  useEffect(() => {
-    setLoading(true);
-    setComments([]);
-  }, [file]);
+  const refresh = useCallback(
+    async (generation: number) => {
+      const token = readToken(generation, file);
+      newestFetch.current = token;
+      if (renderedFile.current !== file) {
+        renderedFile.current = file;
+        // Switching files is the one case where we do want the
+        // placeholder back: the previous file's list means nothing here.
+        setLoading(true);
+        setComments([]);
+      }
+      // Snapshot the current scroll offset so it can be reinstated once
+      // the new comment list commits. Only matters for in-place
+      // refetches — on first mount there's nothing to preserve.
+      const snapshot = findScrollViewport()?.scrollTop ?? null;
+      try {
+        const result = await backend.comments(file);
+        if (newestFetch.current !== token) return;
+        setComments(result);
+        setError(null);
+      } catch (err) {
+        console.error("ThreadedComments.refresh failed:", err);
+        if (newestFetch.current !== token) return;
+        setComments([]);
+        setError(errorMessage(err));
+      } finally {
+        // A superseded run leaves the commit to the fetch that replaced
+        // it, so the list never flashes stale rows in between.
+        if (newestFetch.current === token) {
+          setLoading(false);
+          if (snapshot !== null) setScrollRestore({ top: snapshot });
+        }
+      }
+    },
+    [backend, file, findScrollViewport]
+  );
 
-  // `refreshKey` is a trigger-only dep — bumping it must rerun refresh
-  // even though we don't read its value inside the effect.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey is a trigger
   useEffect(() => {
-    refresh();
+    refresh(refreshKey ?? 0);
   }, [refresh, refreshKey]);
 
-  // Restore the viewport's scrollTop synchronously after a refetch
-  // commits, so the user doesn't see the scroll jump. Pairs with the
-  // snapshot taken at the top of `refresh()`. `comments` is a trigger-
-  // only dep — its identity change is our "new data committed" signal.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: comments is a trigger
+  // Reinstate the viewport's scrollTop synchronously after the refetched
+  // list commits, so the user doesn't see the scroll jump. Pairs with the
+  // snapshot taken inside `refresh()`.
   useLayoutEffect(() => {
-    const target = pendingScrollTopRef.current;
-    if (target === null) return;
-    pendingScrollTopRef.current = null;
+    if (scrollRestore === null) return;
     const viewport = findScrollViewport();
     if (viewport) {
-      viewport.scrollTop = target;
+      viewport.scrollTop = scrollRestore.top;
     }
-  }, [comments, findScrollViewport]);
+  }, [scrollRestore, findScrollViewport]);
 
   // Resolve the current identity once per mount so reaction pills can
   // distinguish "mine" from others' without threading it in from the shell.
@@ -179,42 +190,42 @@ export function ThreadedComments({
         } catch {
           // Best-effort: ack succeeded, don't fail the whole operation.
         }
-        await refresh();
+        await refresh(refreshKey ?? 0);
         onMutation?.();
       } catch (err) {
         console.error("ThreadedComments.ack failed:", err);
         setError(errorMessage(err));
       }
     },
-    [backend, file, refresh, onMutation]
+    [backend, file, refresh, refreshKey, onMutation]
   );
 
   const handleReact = useCallback(
     async (id: string, emoji: string, remove: boolean) => {
       try {
         await backend.react(file, id, emoji, remove);
-        await refresh();
+        await refresh(refreshKey ?? 0);
         onMutation?.();
       } catch (err) {
         console.error("ThreadedComments.react failed:", err);
         setError(errorMessage(err));
       }
     },
-    [backend, file, refresh, onMutation]
+    [backend, file, refresh, refreshKey, onMutation]
   );
 
   const handleDelete = useCallback(
     async (id: string) => {
       try {
         await backend.deleteComments(file, [id]);
-        await refresh();
+        await refresh(refreshKey ?? 0);
         onMutation?.();
       } catch (err) {
         console.error("ThreadedComments.delete failed:", err);
         setError(errorMessage(err));
       }
     },
-    [backend, file, refresh, onMutation]
+    [backend, file, refresh, refreshKey, onMutation]
   );
 
   if (loading) {

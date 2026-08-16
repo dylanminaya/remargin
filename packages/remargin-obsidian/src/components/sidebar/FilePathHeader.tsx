@@ -1,6 +1,7 @@
 import { Check, Copy, FileText, Wand2 } from "lucide-react";
 import { Notice, TFile } from "obsidian";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { readToken } from "@/components/sidebar/readToken";
 import { Button } from "@/components/ui/button";
 import { useContainerWidth } from "@/hooks/useContainerWidth";
 import { abbreviatePath } from "@/lib/abbreviatePath";
@@ -59,25 +60,25 @@ export function FilePathHeader({
     return lastSlash >= 0 ? filePath.slice(0, lastSlash) : "";
   }, [filePath]);
 
-  const [fileContents, setFileContents] = useState<string>("");
+  // Identity of the contents we hold: the active path plus the sidebar's
+  // refresh counter, so any mutation invalidates them and forces a
+  // re-read — specifically so the 'Initialize' button disappears once
+  // frontmatter has been injected.
+  const contentsToken = readToken(refreshKey ?? 0, filePath ?? "");
+  const [read, setRead] = useState<{ token: string; contents: string } | null>(null);
 
-  // Re-read the file contents whenever the active path changes so the
-  // title can follow H1 edits. Uses cachedRead (non-blocking, metadata-
-  // cache-backed) to avoid hammering the vault on every render.
-  // `refreshKey` bumps force a re-read after any sidebar mutation —
-  // specifically so the 'Initialize' button disappears once frontmatter
-  // has been injected.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey is a trigger-only dep; bumping it must re-run the read.
+  // Re-read whenever the token moves so the title can follow H1 edits.
+  // Uses cachedRead (non-blocking, metadata-cache-backed) to avoid
+  // hammering the vault on every render.
   useEffect(() => {
-    let cancelled = false;
-    setFileContents("");
     if (!filePath) return;
     const file = plugin.app.vault.getAbstractFileByPath(filePath);
     if (!(file instanceof TFile)) return;
+    let cancelled = false;
     plugin.app.vault
       .cachedRead(file)
       .then((contents) => {
-        if (!cancelled) setFileContents(contents);
+        if (!cancelled) setRead({ token: contentsToken, contents });
       })
       .catch(() => {
         // Best-effort: title falls back to the filename stem if the read
@@ -86,7 +87,12 @@ export function FilePathHeader({
     return () => {
       cancelled = true;
     };
-  }, [plugin, filePath, refreshKey]);
+  }, [plugin, filePath, contentsToken]);
+
+  // Contents captured under a superseded token describe a path or a
+  // revision we're no longer showing, so they read as "not yet known"
+  // until the current read lands.
+  const fileContents = read?.token === contentsToken ? read.contents : "";
 
   const title = useMemo(() => {
     if (!filePath) return "No file open";
