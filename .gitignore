@@ -23,3 +23,7 @@ notes/
 .remargin.yaml
 .remargin/
 .beads.gate.lock
+
+# Beads / Dolt files (added by bd init)
+.beads/proxieddb/
+*.gate.lock*
