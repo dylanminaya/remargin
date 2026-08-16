@@ -69,11 +69,7 @@ function IconButton({
  */
 export function ViewToggle({ value, onChange }: ViewToggleProps) {
   return (
-    <div
-      className="flex items-center gap-0.5"
-      onClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => e.stopPropagation()}
-    >
+    <div className="flex items-center gap-0.5">
       <IconButton
         icon="list"
         active={value === "flat"}

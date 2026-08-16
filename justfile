@@ -28,6 +28,7 @@ lint-ts:
     pnpm -C packages/remargin-obsidian lint
     pnpm -C packages/remargin-obsidian typecheck
     pnpm -C packages/remargin-website lint
+    pnpm -C packages/remargin-website check
 
 # Build Rust first, then TypeScript.
 build: build-rust build-ts
