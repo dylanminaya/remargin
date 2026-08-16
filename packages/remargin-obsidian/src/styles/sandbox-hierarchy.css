@@ -618,33 +618,43 @@
 /* ========================================================================
  * L1 head — Sandbox section header (variant of SectionHeader). Tinted
  * brand-purple wash, mono-uppercase tracked title, tray icon retained.
- * This is the visual root of the protocol surface.
+ * This is the visual root of the protocol surface. The row itself is a
+ * <div>; the collapsible trigger <button> inside wraps only the
+ * chevron/icon/title/badge, with the actions tray as its sibling.
  * ====================================================================== */
-.remargin-container button.rmg-l1-head,
 .remargin-container .rmg-l1-head {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  background: linear-gradient(to right, var(--rmg-brand-bg) 0, transparent 75%);
+  border-top: 1px solid var(--background-modifier-border);
+  border-bottom: 1px solid var(--background-modifier-border);
+  overflow: hidden;
+  color: var(--text-normal);
+}
+.remargin-container .rmg-l1-head:hover {
+  background: linear-gradient(
+    to right,
+    rgba(127, 109, 242, 0.18) 0,
+    var(--background-modifier-hover) 70%
+  );
+}
+/* Defensive reset — Obsidian styles every <button>. */
+.remargin-container button.rmg-l1-head__trigger {
   display: flex !important;
   align-items: center;
   gap: 8px;
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 11px 12px 11px 14px !important;
-  background: linear-gradient(to right, var(--rmg-brand-bg) 0, transparent 75%) !important;
+  background: transparent !important;
   border: 0 !important;
-  border-top: 1px solid var(--background-modifier-border) !important;
-  border-bottom: 1px solid var(--background-modifier-border) !important;
   cursor: pointer !important;
   text-align: left !important;
   overflow: hidden;
   color: var(--text-normal) !important;
   box-shadow: none !important;
   font: inherit !important;
-}
-.remargin-container button.rmg-l1-head:hover,
-.remargin-container .rmg-l1-head:hover {
-  background: linear-gradient(
-    to right,
-    rgba(127, 109, 242, 0.18) 0,
-    var(--background-modifier-hover) 70%
-  ) !important;
 }
 .remargin-container .rmg-l1-head__chev {
   width: 12px;
@@ -653,8 +663,7 @@
   flex-shrink: 0;
   transition: transform 150ms ease;
 }
-.remargin-container .rmg-l1-head[data-open="false"] .rmg-l1-head__chev,
-.remargin-container button.rmg-l1-head[data-open="false"] .rmg-l1-head__chev {
+.remargin-container .rmg-l1-head[data-open="false"] .rmg-l1-head__chev {
   transform: rotate(-90deg);
 }
 .remargin-container .rmg-l1-head__icon {
@@ -699,5 +708,5 @@
   align-items: center;
   gap: 2px;
   flex-shrink: 0;
-  margin-left: auto;
+  padding-right: 12px;
 }

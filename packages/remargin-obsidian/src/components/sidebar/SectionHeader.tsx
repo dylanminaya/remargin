@@ -30,31 +30,26 @@ export function SectionHeader({
 }: SectionHeaderProps) {
   const Chevron = open ? ChevronDown : ChevronRight;
 
+  // The trigger (a native <button>) wraps only the non-interactive
+  // header content; {actions} render as a sibling so ViewToggle's
+  // buttons never nest inside the trigger button.
   if (variant === "sandbox") {
     return (
-      <CollapsibleTrigger className="rmg-l1-head" data-open={open ? "true" : "false"}>
-        <Chevron className="rmg-l1-head__chev" />
-        <Icon className="rmg-l1-head__icon" />
-        <span className="rmg-l1-head__title">{title}</span>
-        {badge != null && <span className="rmg-l1-head__badge">{badge}</span>}
-        {actions && (
-          // Not a control — keeps action-button clicks (including
-          // keyboard-synthesized ones) from toggling the trigger.
-          <span
-            className="rmg-l1-head__actions"
-            role="presentation"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {actions}
-          </span>
-        )}
-      </CollapsibleTrigger>
+      <div className="rmg-l1-head" data-open={open ? "true" : "false"}>
+        <CollapsibleTrigger className="rmg-l1-head__trigger">
+          <Chevron className="rmg-l1-head__chev" />
+          <Icon className="rmg-l1-head__icon" />
+          <span className="rmg-l1-head__title">{title}</span>
+          {badge != null && <span className="rmg-l1-head__badge">{badge}</span>}
+        </CollapsibleTrigger>
+        {actions && <span className="rmg-l1-head__actions">{actions}</span>}
+      </div>
     );
   }
 
   return (
-    <CollapsibleTrigger className="flex items-center justify-start w-full min-w-0 px-4 py-2 gap-2 bg-bg-border hover:bg-bg-hover overflow-hidden text-left">
-      <div className="flex items-center gap-1.5 flex-1 min-w-0 text-left">
+    <div className="flex items-center w-full min-w-0 bg-bg-border hover:bg-bg-hover overflow-hidden">
+      <CollapsibleTrigger className="flex items-center gap-1.5 flex-1 min-w-0 px-4 py-2 bg-transparent text-left">
         <Chevron className="w-3 h-3 text-text-faint shrink-0" />
         <Icon className="w-3.5 h-3.5 text-text-muted shrink-0" />
         <span className="text-xs font-medium text-text-muted truncate min-w-0">{title}</span>
@@ -68,18 +63,8 @@ export function SectionHeader({
             {badge}
           </Badge>
         )}
-      </div>
-      {actions && (
-        // Not a control — keeps action-button clicks (including
-        // keyboard-synthesized ones) from toggling the trigger.
-        <div
-          className="flex items-center gap-1 ml-auto shrink-0"
-          role="presentation"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {actions}
-        </div>
-      )}
-    </CollapsibleTrigger>
+      </CollapsibleTrigger>
+      {actions && <div className="flex items-center gap-1 pr-4 shrink-0">{actions}</div>}
+    </div>
   );
 }
