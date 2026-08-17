@@ -20,23 +20,50 @@ export function defaultRunner(claudePath: string, remarginPath: string): string 
 }
 
 /**
- * Inline prompt body: resolved prompt + file list + marker-cleanup
- * instruction. With no completion hook in the plugin, the launched
- * agent owns clearing the sandbox markers of the files it processed.
+ * Inline prompt body: resolved prompt + file list. Sandbox markers are
+ * NOT the agent's to clear — they belong to the submitter's identity
+ * (sandbox state is per-identity), so the submit shell line removes
+ * them on success instead of instructing the agent to try.
  */
 export function composeInlinePrompt(prompt: string, files: string[]): string {
   const fileList = files.length > 0 ? `\n\nFiles:\n${files.join("\n")}` : "";
-  return (
-    `${prompt}${fileList}\n\n` +
-    "When you finish processing a file successfully, remove its sandbox marker\n" +
-    "(remargin MCP tool `sandbox_remove`, or `remargin sandbox remove <file>`).\n" +
-    "Leave the marker in place for any file you could not process.\n"
-  );
+  return `${prompt}${fileList}\n`;
 }
 
-/** One `cat <promptfile> | <runner>` per group, chained with `;`. */
-export function buildSubmitShellLine(entries: { promptFile: string; runner: string }[]): string {
-  return entries.map((e) => `cat ${shellQuote(e.promptFile)} | ${e.runner}`).join("; ");
+/** Identity under which the on-success `sandbox remove` runs. */
+export interface SubmitCleanup {
+  remarginPath: string;
+  identityArgs: string[];
+}
+
+export interface SubmitEntry {
+  promptFile: string;
+  runner: string;
+  /** Staged files of this group, cleared on runner success. */
+  files?: string[];
+}
+
+/**
+ * One `cat <promptfile> | <runner>` per group, chained with `;`.
+ * Groups with staged files get `&& remargin … sandbox remove <files>`
+ * so the submitter's markers clear exactly when that group's runner
+ * exits 0 — a failed group stays staged for resubmission.
+ */
+export function buildSubmitShellLine(entries: SubmitEntry[], cleanup?: SubmitCleanup): string {
+  return entries
+    .map((e) => {
+      const run = `cat ${shellQuote(e.promptFile)} | ${e.runner}`;
+      if (!cleanup || !e.files || e.files.length === 0) return run;
+      const remove = [
+        shellQuote(cleanup.remarginPath),
+        ...cleanup.identityArgs.map(shellQuote),
+        "sandbox",
+        "remove",
+        ...e.files.map(shellQuote),
+      ].join(" ");
+      return `${run} && ${remove}`;
+    })
+    .join("; ");
 }
 
 /** Filesystem-safe slug for a group's temp prompt-file basename. */

@@ -45,18 +45,14 @@ describe("defaultRunner", () => {
 });
 
 describe("composeInlinePrompt", () => {
-  it("appends the file list and the marker-cleanup instruction", () => {
+  it("appends the file list and no marker-cleanup instruction", () => {
     const out = composeInlinePrompt("Review everything.", ["a.md", "b.md"]);
-    assert.ok(out.startsWith("Review everything.\n\nFiles:\na.md\nb.md\n\n"), out);
-    assert.ok(out.includes("remove its sandbox marker"), out);
-    assert.ok(out.includes("sandbox_remove"), out);
-    assert.ok(out.includes("Leave the marker in place"), out);
+    assert.equal(out, "Review everything.\n\nFiles:\na.md\nb.md\n");
   });
 
   it("omits the Files block when the list is empty", () => {
     const out = composeInlinePrompt("Review.", []);
-    assert.ok(!out.includes("Files:"), out);
-    assert.ok(out.includes("remove its sandbox marker"), out);
+    assert.equal(out, "Review.\n");
   });
 });
 
@@ -72,6 +68,32 @@ describe("buildSubmitShellLine", () => {
   it("quotes prompt-file paths containing spaces and quotes", () => {
     const line = buildSubmitShellLine([{ promptFile: "/tmp/it's here/p.md", runner: "r" }]);
     assert.equal(line, "cat '/tmp/it'\\''s here/p.md' | r");
+  });
+
+  it("appends the on-success sandbox removal under the submitter identity", () => {
+    const line = buildSubmitShellLine(
+      [{ promptFile: "/tmp/x/a.md", runner: "goose run -i -", files: ["docs/a.md", "b's.md"] }],
+      { remarginPath: "/opt/bin/remargin", identityArgs: ["--config", "/home/me/.remargin.yaml"] }
+    );
+    assert.equal(
+      line,
+      "cat '/tmp/x/a.md' | goose run -i - && " +
+        "'/opt/bin/remargin' '--config' '/home/me/.remargin.yaml' sandbox remove 'docs/a.md' 'b'\\''s.md'"
+    );
+  });
+
+  it("skips the removal for entries without staged files", () => {
+    const line = buildSubmitShellLine(
+      [
+        { promptFile: "/tmp/x/a.md", runner: "r1", files: [] },
+        { promptFile: "/tmp/x/b.md", runner: "r2", files: ["f.md"] },
+      ],
+      { remarginPath: "remargin", identityArgs: [] }
+    );
+    assert.equal(
+      line,
+      "cat '/tmp/x/a.md' | r1; cat '/tmp/x/b.md' | r2 && 'remargin' sandbox remove 'f.md'"
+    );
   });
 });
 

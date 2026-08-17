@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join as joinPath } from "node:path";
 import { Notice, type TFile } from "obsidian";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { buildIdentityArgs } from "@/backend/buildIdentityArgs";
 import type { StagedGroup } from "@/components/sidebar/buildPromptGroups";
 import { InboxSection } from "@/components/sidebar/InboxSection";
 import { InlineCommentEditor } from "@/components/sidebar/InlineCommentEditor";
@@ -207,8 +208,9 @@ export function RemarginSidebar({ plugin }: RemarginSidebarProps) {
       const usedSlugs = new Set<string>();
       const entries = groups.map((group) => {
         const customRunner = group.prompt.runner?.trim() || "";
-        // The slash skill self-cleans markers; the inline prompt carries
-        // its own cleanup instruction for arbitrary runners.
+        // Marker cleanup happens in the shell line (`&& sandbox remove`
+        // under the submitter's identity) — the launched agent runs as a
+        // different identity and cannot see the submitter's markers.
         const promptText =
           !customRunner && slashAvailable
             ? `/remargin:process-sandbox-group ${group.prompt.name}`
@@ -223,13 +225,17 @@ export function RemarginSidebar({ plugin }: RemarginSidebarProps) {
         const runner =
           customRunner ||
           defaultRunner(plugin.backend.resolveClaudeBinary(), plugin.backend.resolveBinary());
-        return { promptFile, runner };
+        return { promptFile, runner, files: group.files };
       });
 
       const vaultPath =
         (plugin.app.vault.adapter as unknown as { basePath?: string }).basePath ?? "";
       const cwd = expandPath(plugin.settings.workingDirectory) || vaultPath;
-      launchInTerminal(prefix, buildSubmitShellLine(entries), cwd);
+      const cleanup = {
+        remarginPath: plugin.backend.resolveBinary(),
+        identityArgs: buildIdentityArgs(plugin.settings),
+      };
+      launchInTerminal(prefix, buildSubmitShellLine(entries, cleanup), cwd);
       new Notice(`Launched terminal for ${groups.length} group(s)`);
       bumpRefresh();
     },
