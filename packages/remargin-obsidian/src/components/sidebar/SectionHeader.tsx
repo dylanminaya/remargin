@@ -49,7 +49,8 @@ export function SectionHeader({
 
   return (
     <div className="flex items-center w-full min-w-0 bg-bg-border hover:bg-bg-hover overflow-hidden">
-      <CollapsibleTrigger className="flex items-center gap-1.5 flex-1 min-w-0 px-4 py-2 bg-transparent text-left">
+      {/* justify-start defends against Obsidian's global button centering. */}
+      <CollapsibleTrigger className="flex items-center justify-start gap-1.5 flex-1 min-w-0 px-4 py-2 bg-transparent text-left">
         <Chevron className="w-3 h-3 text-text-faint shrink-0" />
         <Icon className="w-3.5 h-3.5 text-text-muted shrink-0" />
         <span className="text-xs font-medium text-text-muted truncate min-w-0">{title}</span>
